@@ -1,0 +1,72 @@
+:root {
+  color-scheme: dark;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #f7f4ea;
+  background:
+    radial-gradient(circle at top left, rgba(255, 174, 66, 0.22), transparent 28%),
+    radial-gradient(circle at top right, rgba(67, 97, 238, 0.18), transparent 24%),
+    linear-gradient(180deg, #191412 0%, #120f12 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --bg: #120f12;
+  --panel: rgba(30, 24, 24, 0.82);
+  --panel-strong: rgba(41, 32, 31, 0.96);
+  --panel-soft: rgba(255, 255, 255, 0.04);
+  --line: rgba(255, 240, 221, 0.12);
+  --line-strong: rgba(255, 186, 104, 0.35);
+  --text: #f7f4ea;
+  --muted: #c8bcab;
+  --accent: #ffb347;
+  --accent-strong: #ff8c42;
+  --accent-cool: #6ea8fe;
+  --success: #63d4a9;
+  --danger: #ff7b7b;
+  --warning: #ffd166;
+  --shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+img,
+video {
+  max-width: 100%;
+}
