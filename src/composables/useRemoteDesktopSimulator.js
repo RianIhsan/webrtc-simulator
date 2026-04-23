@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, proxyRefs, reactive, ref, watch } from 'vue'
 
 const TERMINAL_SESSION_STATUSES = new Set([
   'rejected',
@@ -831,7 +831,7 @@ export function useRemoteDesktopSimulator() {
     cleanupAll()
   })
 
-  return {
+  return proxyRefs({
     canInteract,
     config,
     controlReady,
@@ -853,5 +853,5 @@ export function useRemoteDesktopSimulator() {
     status,
     terminateSession,
     connectSocket,
-  }
+  })
 }
