@@ -47,9 +47,13 @@ const statusItems = computed(() => [
 
 const sessionFacts = computed(() => [
   ['Session ID', simulator.config.sessionId || '-'],
+  ['Socket session', simulator.status.socketSessionId || '-'],
   ['Device ID', simulator.config.deviceId || '-'],
   ['Request ID', simulator.status.requestId || '-'],
   ['Current Step', simulator.status.currentStep || '-'],
+  ['Last signal', simulator.status.lastSignalType || '-'],
+  ['Remote desc', simulator.status.hasRemoteDescription ? 'yes' : 'no'],
+  ['Pending ICE', String(simulator.status.pendingRemoteIceCount ?? 0)],
   ['TURN relay used', simulator.status.turnRelayUsed ?? '-'],
   ['Last offer', simulator.status.latestOfferAt || '-'],
   ['Last answer', simulator.status.latestAnswerAt || '-'],
@@ -140,6 +144,10 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             <label class="toggle-item">
               <input v-model="simulator.config.autoCreatePeerOnAccept" type="checkbox" />
               <span>Auto buat peer saat event accepted datang</span>
+            </label>
+            <label class="toggle-item">
+              <input v-model="simulator.config.autoCreatePeerAfterSocketOpen" type="checkbox" />
+              <span>Auto buat peer setelah socket open</span>
             </label>
             <label class="toggle-item">
               <input v-model="simulator.config.autoCreateOfferOnPeerReady" type="checkbox" />

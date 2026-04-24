@@ -37,6 +37,15 @@ function toIsoTime(date = new Date()) {
   return date.toISOString()
 }
 
+function normalizeSessionDescriptionSdp(sdp) {
+  if (typeof sdp !== 'string') {
+    return ''
+  }
+
+  const normalized = sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n')
+  return normalized.endsWith('\r\n') ? normalized : `${normalized}\r\n`
+}
+
 function createLogEntry(level, message, detail) {
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -92,6 +101,7 @@ export function useRemoteDesktopSimulator() {
     reconnectSocket: true,
     autoConnectSocket: true,
     autoCreatePeerOnAccept: true,
+    autoCreatePeerAfterSocketOpen: true,
     autoCreateOfferOnPeerReady: true,
     iceServersJson: JSON.stringify([{ urls: 'stun:stun.l.google.com:19302' }], null, 2),
   })
@@ -100,6 +110,7 @@ export function useRemoteDesktopSimulator() {
     currentStep: 'idle',
     sessionStatus: 'idle',
     socketStatus: 'idle',
+    socketSessionId: '',
     peerStatus: 'idle',
     connectionState: 'new',
     signalingState: 'stable',
@@ -107,6 +118,9 @@ export function useRemoteDesktopSimulator() {
     controlChannelState: 'idle',
     requestState: 'idle',
     remoteStreamState: 'idle',
+    hasRemoteDescription: false,
+    pendingRemoteIceCount: 0,
+    lastSignalType: '',
     turnRelayUsed: null,
     lastError: '',
     requestId: '',
@@ -124,6 +138,7 @@ export function useRemoteDesktopSimulator() {
   const controlChannelRef = ref(null)
   const reconnectTimer = ref(null)
   const lastMouseMoveSentAt = ref(0)
+  const pendingRemoteIceCandidates = ref([])
 
   const addLog = (level, message, detail = null) => {
     logs.value = [createLogEntry(level, message, detail), ...logs.value].slice(0, 120)
@@ -187,6 +202,55 @@ export function useRemoteDesktopSimulator() {
     return Array.isArray(parsed) ? parsed : []
   }
 
+  const syncRemoteDescriptionFlag = () => {
+    status.hasRemoteDescription = Boolean(peerRef.value?.remoteDescription)
+  }
+
+  const updatePendingRemoteIceCount = () => {
+    status.pendingRemoteIceCount = pendingRemoteIceCandidates.value.length
+  }
+
+  const queueRemoteIceCandidate = (candidate) => {
+    pendingRemoteIceCandidates.value = [...pendingRemoteIceCandidates.value, candidate].slice(-40)
+    updatePendingRemoteIceCount()
+    addLog('warning', 'Remote ICE candidate disimpan dulu sampai answer terpasang.', {
+      pendingCount: pendingRemoteIceCandidates.value.length,
+      candidate,
+    })
+  }
+
+  const flushPendingRemoteIceCandidates = async () => {
+    if (!peerRef.value?.remoteDescription || pendingRemoteIceCandidates.value.length === 0) {
+      return
+    }
+
+    const queuedCandidates = [...pendingRemoteIceCandidates.value]
+    pendingRemoteIceCandidates.value = []
+    updatePendingRemoteIceCount()
+    addLog('info', 'Memproses remote ICE candidate yang sempat tertunda.', {
+      count: queuedCandidates.length,
+    })
+
+    for (const candidate of queuedCandidates) {
+      await handleIncomingIceCandidate(candidate)
+    }
+  }
+
+  const resetSessionRuntimeState = ({ preserveSessionId = false } = {}) => {
+    pendingRemoteIceCandidates.value = []
+    updatePendingRemoteIceCount()
+    status.hasRemoteDescription = false
+    status.lastSignalType = ''
+    status.latestOfferAt = ''
+    status.latestAnswerAt = ''
+    status.turnRelayUsed = null
+    if (!preserveSessionId) {
+      status.socketSessionId = ''
+      config.sessionId = ''
+      session.value = null
+    }
+  }
+
   const sendSocketEvent = (event, data) => {
     if (!socketRef.value || socketRef.value.readyState !== WebSocket.OPEN) {
       setError('WebSocket belum terhubung, event belum bisa dikirim.', { event, data })
@@ -218,6 +282,11 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    if (!peerRef.value.remoteDescription) {
+      queueRemoteIceCandidate(candidate)
+      return
+    }
+
     try {
       await peerRef.value.addIceCandidate(
         new RTCIceCandidate({
@@ -240,18 +309,64 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    const peer = peerRef.value
+    const normalizedSdp = normalizeSessionDescriptionSdp(sdp)
+    const remoteDescription = peer.remoteDescription
+
+    console.log('[remote-desktop] incoming answer SDP (raw):', sdp)
+    console.log('[remote-desktop] incoming answer SDP (normalized):', normalizedSdp)
+    console.log('[remote-desktop] incoming answer SDP meta (raw):', {
+      length: sdp.length,
+      hasTrailingCrlf: sdp.endsWith('\r\n'),
+    })
+    console.log('[remote-desktop] incoming answer SDP meta (normalized):', {
+      length: normalizedSdp.length,
+      hasTrailingCrlf: normalizedSdp.endsWith('\r\n'),
+    })
+
+    if (remoteDescription?.type === 'answer' && remoteDescription.sdp === normalizedSdp) {
+      addLog('warning', 'Answer duplikat diterima, pemasangan ulang dilewati.')
+      return
+    }
+
     try {
-      await peerRef.value.setRemoteDescription(
+      if (peer.signalingState !== 'have-local-offer') {
+        addLog('warning', 'Answer datang saat peer belum siap menerima answer.', {
+          signalingState: peer.signalingState,
+          hasLocalDescription: Boolean(peer.localDescription),
+          hasRemoteDescription: Boolean(peer.remoteDescription),
+        })
+      }
+
+      if (normalizedSdp !== sdp) {
+        addLog('info', 'SDP answer dinormalisasi sebelum dipasang ke peer connection.', {
+          rawLength: sdp.length,
+          normalizedLength: normalizedSdp.length,
+          hadTrailingCrlf: sdp.endsWith('\r\n'),
+        })
+      }
+
+      await peer.setRemoteDescription(
         new RTCSessionDescription({
           type: 'answer',
-          sdp,
+          sdp: normalizedSdp,
         }),
       )
       status.latestAnswerAt = toIsoTime()
       status.currentStep = 'answer_received'
+      syncRemoteDescriptionFlag()
       addLog('info', 'Remote answer berhasil dipasang ke peer connection.')
+      await flushPendingRemoteIceCandidates()
     } catch (error) {
-      setError('Gagal memasang remote answer.', { message: error.message })
+      setError('Gagal memasang remote answer.', {
+        message: error.message,
+        signalingState: peer.signalingState,
+        localDescriptionType: peer.localDescription?.type ?? null,
+        remoteDescriptionType: peer.remoteDescription?.type ?? null,
+        sdpLength: typeof sdp === 'string' ? sdp.length : null,
+        normalizedSdpLength: normalizedSdp.length,
+        hadTrailingCrlf: typeof sdp === 'string' ? sdp.endsWith('\r\n') : null,
+      })
     }
   }
 
@@ -264,6 +379,7 @@ export function useRemoteDesktopSimulator() {
     status.connectionState = peer.connectionState
     status.signalingState = peer.signalingState
     status.iceGatheringState = peer.iceGatheringState
+    syncRemoteDescriptionFlag()
   }
 
   const attachDataChannel = (channel) => {
@@ -406,6 +522,16 @@ export function useRemoteDesktopSimulator() {
       await peerRef.value.setLocalDescription(offer)
       status.latestOfferAt = toIsoTime()
       addLog('success', 'Offer berhasil dibuat.', offer.sdp)
+      console.log('[remote-desktop] local offer SDP:', offer.sdp)
+      console.log('[remote-desktop] localDescription SDP:', peerRef.value.localDescription?.sdp ?? null)
+      console.log('[remote-desktop] local offer SDP meta:', {
+        length: offer.sdp?.length ?? 0,
+        hasTrailingCrlf: offer.sdp?.endsWith('\r\n') ?? false,
+      })
+      console.log('[remote-desktop] localDescription SDP meta:', {
+        length: peerRef.value.localDescription?.sdp?.length ?? 0,
+        hasTrailingCrlf: peerRef.value.localDescription?.sdp?.endsWith('\r\n') ?? false,
+      })
 
       sendSocketEvent('remote_signaling.offer', {
         session_id: config.sessionId,
@@ -428,6 +554,7 @@ export function useRemoteDesktopSimulator() {
 
     eventHistory.value = [{ event: eventName, data, at: toIsoTime() }, ...eventHistory.value].slice(0, 80)
     addLog('in', `WS <- ${eventName}`, data)
+    status.lastSignalType = data.signal_type ?? eventName
 
     if (SESSION_EVENT_TO_STATUS[eventName]) {
       status.sessionStatus = SESSION_EVENT_TO_STATUS[eventName]
@@ -496,6 +623,7 @@ export function useRemoteDesktopSimulator() {
     }
 
     status.socketStatus = 'closed'
+    status.socketSessionId = ''
   }
 
   const cleanupPeerConnection = () => {
@@ -526,6 +654,9 @@ export function useRemoteDesktopSimulator() {
     status.iceGatheringState = 'complete'
     status.controlChannelState = 'closed'
     status.remoteStreamState = remoteStream.value ? 'paused' : 'idle'
+    syncRemoteDescriptionFlag()
+    pendingRemoteIceCandidates.value = []
+    updatePendingRemoteIceCount()
 
     if (remoteStream.value) {
       remoteStream.value.getTracks().forEach((track) => track.stop())
@@ -552,13 +683,29 @@ export function useRemoteDesktopSimulator() {
 
     const socketUrl = buildSocketUrl(config.wsPath, config.sessionId, config.accessToken)
     const socket = new WebSocket(socketUrl)
+    const targetSessionId = config.sessionId
     socketRef.value = socket
-    addLog('info', 'Mencoba connect WebSocket remote desktop.', { socketUrl })
+    status.socketSessionId = targetSessionId
+    addLog('info', 'Mencoba connect WebSocket remote desktop.', {
+      socketUrl,
+      sessionId: targetSessionId,
+    })
 
     socket.onopen = () => {
       status.socketStatus = 'open'
       status.currentStep = 'socket_connected'
-      addLog('success', 'WebSocket remote desktop terhubung.')
+      addLog('success', 'WebSocket remote desktop terhubung.', {
+        sessionId: targetSessionId,
+      })
+
+      if (config.autoCreatePeerAfterSocketOpen && !peerRef.value) {
+        addLog(
+          'info',
+          'Melanjutkan setup peer setelah socket open. Ini jadi fallback kalau event accepted belum datang.',
+          { sessionId: targetSessionId },
+        )
+        createPeerConnection()
+      }
     }
 
     socket.onmessage = async (event) => {
@@ -572,7 +719,10 @@ export function useRemoteDesktopSimulator() {
     }
 
     socket.onerror = (event) => {
-      setError('WebSocket mengalami error.', event)
+      setError('WebSocket mengalami error.', {
+        sessionId: targetSessionId,
+        event,
+      })
     }
 
     socket.onclose = (event) => {
@@ -580,9 +730,17 @@ export function useRemoteDesktopSimulator() {
       addLog('warning', 'WebSocket tertutup.', {
         code: event.code,
         reason: event.reason,
+        sessionId: targetSessionId,
       })
+      if (socketRef.value === socket) {
+        status.socketSessionId = ''
+      }
 
       if (config.reconnectSocket && !isTerminal.value) {
+        addLog('info', 'Menjadwalkan reconnect WebSocket.', {
+          sessionId: targetSessionId,
+          delayMs: 1500,
+        })
         reconnectTimer.value = window.setTimeout(() => {
           connectSocket()
         }, 1500)
@@ -592,6 +750,9 @@ export function useRemoteDesktopSimulator() {
 
   const createSession = async () => {
     clearError()
+    cleanupAll()
+    resetSessionRuntimeState()
+    eventHistory.value = []
     status.requestState = 'loading'
     status.currentStep = 'creating_session'
 
@@ -727,6 +888,7 @@ export function useRemoteDesktopSimulator() {
     status.sessionStatus = 'terminated'
     cleanupPeerConnection()
     cleanupSocket({ reason: 'session-terminated' })
+    resetSessionRuntimeState({ preserveSessionId: true })
   }
 
   const normalizedCoordinates = (event) => {

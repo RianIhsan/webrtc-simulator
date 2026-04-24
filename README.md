@@ -26,7 +26,7 @@ npm run dev
 
 1. Isi `Access token`, `Device ID`, dan endpoint backend.
 2. Klik `Start from HTTP create session`.
-3. Tunggu event `remote.desktop.session.accepted` dari backend atau isi `Session ID manual` untuk reconnect.
+3. Setelah socket terbuka, FE bisa lanjut menunggu event `remote.desktop.session.accepted` atau langsung setup peer jika mode auto fallback diaktifkan.
 4. Lanjutkan `Connect WebSocket`, `Setup peer`, lalu `Create offer` jika auto mode dimatikan.
 5. Saat answer dan track sudah masuk, remote screen akan muncul di panel utama.
 6. Fokus ke area screen untuk mulai kirim keyboard dan mouse event.
