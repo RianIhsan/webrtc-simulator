@@ -55,6 +55,8 @@ const sessionFacts = computed(() => [
   ['Remote desc', simulator.status.hasRemoteDescription ? 'yes' : 'no'],
   ['Pending ICE', String(simulator.status.pendingRemoteIceCount ?? 0)],
   ['TURN relay used', simulator.status.turnRelayUsed ?? '-'],
+  ['ICE mode', simulator.iceConfigSummary.mode],
+  ['ICE servers', String(simulator.iceConfigSummary.serverCount ?? 0)],
   ['Last offer', simulator.status.latestOfferAt || '-'],
   ['Last answer', simulator.status.latestAnswerAt || '-'],
 ])
@@ -135,6 +137,46 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             <span>ICE servers JSON</span>
             <textarea v-model="simulator.config.iceServersJson" rows="7" spellcheck="false" />
           </label>
+
+          <div class="turn-helper">
+            <div class="turn-helper__head">
+              <div>
+                <span class="turn-helper__label">TURN helper</span>
+                <strong>Isi credential fresh lalu terapkan ke ICE config simulator.</strong>
+              </div>
+              <span class="turn-helper__badge">
+                {{ simulator.iceConfigSummary.hasTurn ? 'TURN active' : 'TURN missing' }}
+              </span>
+            </div>
+
+            <div class="config-grid">
+              <label>
+                <span>TURN username</span>
+                <input v-model="simulator.config.turnUsername" placeholder="timestamp:operator-id" />
+              </label>
+              <label>
+                <span>TURN credential</span>
+                <input v-model="simulator.config.turnCredential" placeholder="credential fresh dari backend" />
+              </label>
+              <label>
+                <span>TURN expires at</span>
+                <input v-model="simulator.config.turnExpiresAt" placeholder="opsional, untuk catatan testing" />
+              </label>
+              <label>
+                <span>TURN URLs JSON</span>
+                <textarea v-model="simulator.config.turnUrlsJson" rows="4" spellcheck="false" />
+              </label>
+            </div>
+
+            <div class="action-row">
+              <button class="secondary-button" type="button" @click="simulator.applyStunOnlyPreset">
+                Apply STUN only
+              </button>
+              <button class="primary-button" type="button" @click="simulator.applyTurnPreset">
+                Apply STUN + TURN
+              </button>
+            </div>
+          </div>
 
           <div class="toggle-grid">
             <label class="toggle-item">
@@ -382,7 +424,8 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
 .remote-stage,
 .toggle-item,
 .textarea-field,
-.config-grid label {
+.config-grid label,
+.turn-helper {
   border: 1px solid var(--line);
   background: var(--panel-soft);
   border-radius: 20px;
@@ -444,6 +487,43 @@ label span {
   display: grid;
   gap: 10px;
   padding: 14px 16px;
+}
+
+.turn-helper {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.turn-helper__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.turn-helper__head strong {
+  display: block;
+  color: var(--text);
+}
+
+.turn-helper__label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.turn-helper__badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 179, 71, 0.1);
+  color: var(--text);
+  font-size: 0.84rem;
+  white-space: nowrap;
 }
 
 input,

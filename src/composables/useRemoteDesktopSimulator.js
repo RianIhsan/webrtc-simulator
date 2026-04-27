@@ -17,6 +17,15 @@ const SESSION_EVENT_TO_STATUS = {
   'remote.desktop.session.expired': 'expired',
 }
 
+const SIGNALING_EVENT_NAMES = new Set([
+  'remote.desktop.signaling.message',
+  'remote.desktop.signaling',
+  'remote_signaling',
+  'remote_signaling.answer',
+  'remote_signaling.ice_candidate',
+  'remote-signaling',
+])
+
 function resolveEnvelope(payload) {
   if (!payload || typeof payload !== 'object') {
     return payload
@@ -44,6 +53,56 @@ function normalizeSessionDescriptionSdp(sdp) {
 
   const normalized = sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n')
   return normalized.endsWith('\r\n') ? normalized : `${normalized}\r\n`
+}
+
+function normalizeSocketPayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+
+  if (typeof payload.event === 'string') {
+    return {
+      event: payload.event,
+      data: payload.data ?? {},
+    }
+  }
+
+  const directSignalType = payload.data?.signal_type ?? payload.signal_type
+  if (typeof directSignalType === 'string') {
+    return {
+      event: 'remote.desktop.signaling.message',
+      data: payload.data?.signal_type ? payload.data : payload,
+    }
+  }
+
+  const directStatus = payload.data?.status ?? payload.status
+  const directConnectionState = payload.data?.connection_state ?? payload.connection_state
+  if (typeof directStatus === 'string' || typeof directConnectionState === 'string') {
+    return {
+      event: 'remote.desktop.session.connection_state',
+      data: payload.data?.status || payload.data?.connection_state ? payload.data : payload,
+    }
+  }
+
+  return null
+}
+
+function summarizeSocketPayloadShape(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return {
+      kind: typeof payload,
+      keys: [],
+    }
+  }
+
+  return {
+    kind: Array.isArray(payload) ? 'array' : 'object',
+    keys: Object.keys(payload).slice(0, 12),
+    hasEvent: typeof payload.event === 'string',
+    hasDataObject: Boolean(payload.data && typeof payload.data === 'object'),
+    signalType: payload.data?.signal_type ?? payload.signal_type ?? null,
+    sessionId: payload.data?.session_id ?? payload.session_id ?? null,
+  }
 }
 
 function createLogEntry(level, message, detail) {
@@ -92,10 +151,10 @@ export function useRemoteDesktopSimulator() {
   const config = reactive({
     apiBaseUrl: 'http://152.42.216.177:8888/api/v1',
     wsPath: 'ws://152.42.216.177:8888/ws/remote-desktop',
-    accessToken: '',
-    deviceId: 'device-001',
+    accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4MjExYmMzYy1hODM4LTQ5MzMtYjM5ZS0xYjVhNDdjMDY5ZmIiLCJlbWFpbCI6InN1cGVyYWRtaW5Ac2VudHVoLmlkIiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzc3MDE4OTQ4LCJleHAiOjE3NzcxMDUzNDh9._wseiWbHNp3TjYFezAiPj7NWYV-5BiER1wpHNCjj_Dw',
+    deviceId: 'd7c5a235-5117-4d4a-a05a-5978c4aadf9a',
     sessionId: '',
-    timeoutSeconds: 120,
+    timeoutSeconds: 1000,
     metadataSource: 'web',
     metadataPage: 'device-detail',
     reconnectSocket: true,
@@ -103,7 +162,16 @@ export function useRemoteDesktopSimulator() {
     autoCreatePeerOnAccept: true,
     autoCreatePeerAfterSocketOpen: true,
     autoCreateOfferOnPeerReady: true,
+    iceTransportPolicy: 'relay',
     iceServersJson: JSON.stringify([{ urls: 'stun:stun.l.google.com:19302' }], null, 2),
+    turnUrlsJson: JSON.stringify(
+      ['turn:turn-client.sentuhdigital.id:3478?transport=udp', 'turn:turn-client.sentuhdigital.id:3478?transport=tcp'],
+      null,
+      2,
+    ),
+    turnUsername: '',
+    turnCredential: '',
+    turnExpiresAt: '',
   })
 
   const status = reactive({
@@ -126,6 +194,9 @@ export function useRemoteDesktopSimulator() {
     requestId: '',
     latestAnswerAt: '',
     latestOfferAt: '',
+    wsMessageCount: 0,
+    lastWsEventAt: '',
+    lastWsRawPreview: '',
   })
 
   const session = ref(null)
@@ -139,6 +210,8 @@ export function useRemoteDesktopSimulator() {
   const reconnectTimer = ref(null)
   const lastMouseMoveSentAt = ref(0)
   const pendingRemoteIceCandidates = ref([])
+  const activeSocketConnectPromise = ref(null)
+  const signalingWatchdogTimer = ref(null)
 
   const addLog = (level, message, detail = null) => {
     logs.value = [createLogEntry(level, message, detail), ...logs.value].slice(0, 120)
@@ -159,6 +232,33 @@ export function useRemoteDesktopSimulator() {
   const canInteract = computed(
     () => controlReady.value && status.sessionStatus === 'connected' && status.remoteStreamState === 'active',
   )
+  const parsedIceServers = computed(() => parseIceServers())
+  const iceConfigSummary = computed(() => {
+    const servers = parsedIceServers.value
+    const urls = servers.flatMap((server) => {
+      if (!server || typeof server !== 'object') {
+        return []
+      }
+
+      const value = server.urls
+      if (Array.isArray(value)) {
+        return value.filter((url) => typeof url === 'string')
+      }
+
+      return typeof value === 'string' ? [value] : []
+    })
+
+    const hasTurn = urls.some((url) => /^turns?:/i.test(url))
+    const hasStun = urls.some((url) => /^stuns?:/i.test(url))
+
+    return {
+      serverCount: servers.length,
+      urlCount: urls.length,
+      hasTurn,
+      hasStun,
+      mode: hasTurn ? 'stun+turn' : hasStun ? 'stun-only' : 'custom',
+    }
+  })
 
   watch(remoteVideoElement, (element) => {
     if (!element) {
@@ -202,12 +302,89 @@ export function useRemoteDesktopSimulator() {
     return Array.isArray(parsed) ? parsed : []
   }
 
+  const normalizeIceTransportPolicy = () => {
+    const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : ''
+    return value === 'all' ? 'all' : 'relay'
+  }
+
+  const buildStunOnlyIceServers = () => [{ urls: 'stun:stun.l.google.com:19302' }]
+
+  const applyStunOnlyPreset = () => {
+    config.iceServersJson = JSON.stringify(buildStunOnlyIceServers(), null, 2)
+    config.iceTransportPolicy = 'all'
+    addLog('info', 'Preset ICE STUN-only diterapkan ke simulator.', {
+      mode: 'stun-only',
+      iceTransportPolicy: config.iceTransportPolicy,
+    })
+  }
+
+  const applyTurnPreset = () => {
+    const turnUrls = parseJson(config.turnUrlsJson, [])
+    const urls = Array.isArray(turnUrls) ? turnUrls.filter((url) => typeof url === 'string' && url.trim()) : []
+
+    if (urls.length === 0) {
+      setError('TURN URLs JSON belum valid. Isi array URL TURN dulu.')
+      return
+    }
+
+    if (!config.turnUsername || !config.turnCredential) {
+      setError('TURN username dan credential wajib diisi sebelum menerapkan preset TURN.')
+      return
+    }
+
+    config.iceServersJson = JSON.stringify(
+      [
+        ...buildStunOnlyIceServers(),
+        {
+          urls,
+          username: config.turnUsername,
+          credential: config.turnCredential,
+        },
+      ],
+      null,
+      2,
+    )
+    config.iceTransportPolicy = 'relay'
+
+    addLog('info', 'Preset ICE STUN + TURN diterapkan ke simulator.', {
+      mode: 'stun+turn',
+      turnUrlCount: urls.length,
+      turnExpiresAt: config.turnExpiresAt || null,
+      iceTransportPolicy: config.iceTransportPolicy,
+    })
+  }
+
   const syncRemoteDescriptionFlag = () => {
     status.hasRemoteDescription = Boolean(peerRef.value?.remoteDescription)
   }
 
   const updatePendingRemoteIceCount = () => {
     status.pendingRemoteIceCount = pendingRemoteIceCandidates.value.length
+  }
+
+  const clearSignalingWatchdog = () => {
+    window.clearTimeout(signalingWatchdogTimer.value)
+    signalingWatchdogTimer.value = null
+  }
+
+  const armSignalingWatchdog = (context = {}) => {
+    clearSignalingWatchdog()
+
+    signalingWatchdogTimer.value = window.setTimeout(() => {
+      if (status.latestAnswerAt) {
+        return
+      }
+
+      addLog('warning', 'Session sudah accepted, tapi signaling answer/ICE belum terlihat di FE.', {
+        sessionId: config.sessionId,
+        currentStep: status.currentStep,
+        lastSignalType: status.lastSignalType,
+        wsMessageCount: status.wsMessageCount,
+        lastWsEventAt: status.lastWsEventAt,
+        lastWsRawPreview: status.lastWsRawPreview,
+        context,
+      })
+    }, 5000)
   }
 
   const queueRemoteIceCandidate = (candidate) => {
@@ -237,6 +414,7 @@ export function useRemoteDesktopSimulator() {
   }
 
   const resetSessionRuntimeState = ({ preserveSessionId = false } = {}) => {
+    clearSignalingWatchdog()
     pendingRemoteIceCandidates.value = []
     updatePendingRemoteIceCount()
     status.hasRemoteDescription = false
@@ -427,6 +605,12 @@ export function useRemoteDesktopSimulator() {
     try {
       const peer = new RTCPeerConnection({
         iceServers: parseIceServers(),
+        iceTransportPolicy: normalizeIceTransportPolicy(),
+      })
+
+      addLog('info', 'Peer connection dibuat dengan konfigurasi ICE.', {
+        iceTransportPolicy: normalizeIceTransportPolicy(),
+        iceServerCount: parseIceServers().length,
       })
 
       peer.onicecandidate = (event) => {
@@ -555,6 +739,11 @@ export function useRemoteDesktopSimulator() {
     eventHistory.value = [{ event: eventName, data, at: toIsoTime() }, ...eventHistory.value].slice(0, 80)
     addLog('in', `WS <- ${eventName}`, data)
     status.lastSignalType = data.signal_type ?? eventName
+    addLog('info', 'Event WebSocket masuk ke router.', {
+      eventName,
+      signalType: data.signal_type ?? null,
+      sessionId: data.session_id ?? config.sessionId,
+    })
 
     if (SESSION_EVENT_TO_STATUS[eventName]) {
       status.sessionStatus = SESSION_EVENT_TO_STATUS[eventName]
@@ -563,13 +752,27 @@ export function useRemoteDesktopSimulator() {
     if (eventName === 'remote.desktop.session.accepted') {
       syncSession({ ...data, status: 'accepted' })
       status.currentStep = 'session_accepted'
+      armSignalingWatchdog({
+        source: 'session.accepted',
+        acceptedAt: data.accepted_at ?? null,
+      })
       if (config.autoCreatePeerOnAccept) {
         await createPeerConnection()
       }
       return
     }
 
-    if (eventName === 'remote.desktop.signaling.message') {
+    if (SIGNALING_EVENT_NAMES.has(eventName) || typeof data.signal_type === 'string') {
+      addLog('info', 'Pesan signaling terdeteksi di WebSocket.', {
+        eventName,
+        signalType: data.signal_type ?? null,
+        sessionId: data.session_id ?? null,
+      })
+
+      if (data.signal_type === 'answer' || data.signal_type === 'ice_candidate') {
+        clearSignalingWatchdog()
+      }
+
       if (data.signal_type === 'answer') {
         await handleIncomingAnswer(data.sdp)
       }
@@ -607,9 +810,11 @@ export function useRemoteDesktopSimulator() {
   const cleanupSocket = (options = {}) => {
     window.clearTimeout(reconnectTimer.value)
     reconnectTimer.value = null
+    clearSignalingWatchdog()
 
     const socket = socketRef.value
     socketRef.value = null
+    activeSocketConnectPromise.value = null
 
     if (socket) {
       socket.onopen = null
@@ -665,6 +870,7 @@ export function useRemoteDesktopSimulator() {
   }
 
   const cleanupAll = () => {
+    clearSignalingWatchdog()
     cleanupPeerConnection()
     cleanupSocket()
   }
@@ -673,7 +879,21 @@ export function useRemoteDesktopSimulator() {
     clearError()
     if (!config.sessionId) {
       setError('Session ID belum ada. Buat session atau isi session ID manual dulu.')
-      return
+      return Promise.resolve(false)
+    }
+
+    if (socketRef.value?.readyState === WebSocket.OPEN && status.socketSessionId === config.sessionId) {
+      addLog('info', 'WebSocket sudah aktif untuk session ini, connect ulang dilewati.', {
+        sessionId: config.sessionId,
+      })
+      return Promise.resolve(true)
+    }
+
+    if (activeSocketConnectPromise.value && status.socketSessionId === config.sessionId) {
+      addLog('info', 'Koneksi WebSocket untuk session ini sedang berlangsung, menunggu hasil yang sama.', {
+        sessionId: config.sessionId,
+      })
+      return activeSocketConnectPromise.value
     }
 
     cleanupSocket()
@@ -686,36 +906,86 @@ export function useRemoteDesktopSimulator() {
     const targetSessionId = config.sessionId
     socketRef.value = socket
     status.socketSessionId = targetSessionId
+    let connectSettled = false
+    let resolveSocketConnect = null
     addLog('info', 'Mencoba connect WebSocket remote desktop.', {
       socketUrl,
       sessionId: targetSessionId,
     })
 
-    socket.onopen = () => {
-      status.socketStatus = 'open'
-      status.currentStep = 'socket_connected'
-      addLog('success', 'WebSocket remote desktop terhubung.', {
-        sessionId: targetSessionId,
-      })
-
-      if (config.autoCreatePeerAfterSocketOpen && !peerRef.value) {
-        addLog(
-          'info',
-          'Melanjutkan setup peer setelah socket open. Ini jadi fallback kalau event accepted belum datang.',
-          { sessionId: targetSessionId },
-        )
-        createPeerConnection()
-      }
-    }
-
-    socket.onmessage = async (event) => {
-      const payload = parseJson(event.data, null)
-      if (!payload) {
-        addLog('warning', 'Pesan WebSocket tidak valid JSON.', event.data)
+    const finishSocketConnect = (value) => {
+      if (connectSettled) {
         return
       }
 
-      await routeSocketEvent(payload)
+      connectSettled = true
+      activeSocketConnectPromise.value = null
+      resolveSocketConnect?.(value)
+    }
+
+    activeSocketConnectPromise.value = new Promise((resolve) => {
+      resolveSocketConnect = resolve
+
+      socket.onopen = () => {
+        status.socketStatus = 'open'
+        status.currentStep = 'socket_connected'
+        addLog('success', 'WebSocket remote desktop terhubung.', {
+          sessionId: targetSessionId,
+        })
+
+        if (config.autoCreatePeerAfterSocketOpen && !peerRef.value) {
+          addLog(
+            'info',
+            'Melanjutkan setup peer setelah socket open. Ini jadi fallback kalau event accepted belum datang.',
+            { sessionId: targetSessionId },
+          )
+          createPeerConnection()
+        }
+
+        finishSocketConnect(true)
+      }
+    })
+
+    socket.onmessage = async (event) => {
+      const rawMessage = typeof event.data === 'string' ? event.data : String(event.data)
+      status.wsMessageCount += 1
+      status.lastWsEventAt = toIsoTime()
+      status.lastWsRawPreview = rawMessage.slice(0, 240)
+      addLog('ws', 'WS frame diterima dari backend.', {
+        sessionId: targetSessionId,
+        messageIndex: status.wsMessageCount,
+        rawPreview: rawMessage.slice(0, 400),
+      })
+
+      const payload = parseJson(event.data, null)
+      if (!payload) {
+        addLog('warning', 'Pesan WebSocket tidak valid JSON.', {
+          sessionId: targetSessionId,
+          rawPreview: rawMessage.slice(0, 400),
+        })
+        return
+      }
+
+      const normalizedPayload = normalizeSocketPayload(payload)
+      const payloadShape = summarizeSocketPayloadShape(payload)
+      addLog('ws', 'WS frame berhasil di-parse.', {
+        sessionId: targetSessionId,
+        payloadShape,
+      })
+      console.log('[remote-desktop] WS raw payload:', payload)
+      console.log('[remote-desktop] WS raw payload shape:', payloadShape)
+      console.log('[remote-desktop] WS normalized payload:', normalizedPayload)
+
+      if (!normalizedPayload) {
+        addLog('warning', 'Pesan WebSocket tidak dikenali bentuknya.', {
+          sessionId: targetSessionId,
+          payloadShape,
+          payload,
+        })
+        return
+      }
+
+      await routeSocketEvent(normalizedPayload)
     }
 
     socket.onerror = (event) => {
@@ -723,6 +993,7 @@ export function useRemoteDesktopSimulator() {
         sessionId: targetSessionId,
         event,
       })
+      finishSocketConnect(false)
     }
 
     socket.onclose = (event) => {
@@ -745,7 +1016,11 @@ export function useRemoteDesktopSimulator() {
           connectSocket()
         }, 1500)
       }
+
+      finishSocketConnect(false)
     }
+
+    return activeSocketConnectPromise.value
   }
 
   const createSession = async () => {
@@ -797,7 +1072,26 @@ export function useRemoteDesktopSimulator() {
       addLog('success', 'Session remote desktop berhasil dibuat.', data)
 
       if (config.autoConnectSocket) {
-        connectSocket()
+        const socketConnected = await connectSocket()
+
+        if (socketConnected) {
+          addLog('info', 'Resync detail session setelah WebSocket open untuk menutup gap race condition awal.', {
+            sessionId: config.sessionId,
+          })
+          await loadSessionDetail({
+            silentIfRequested: true,
+            preserveCurrentStep: true,
+          })
+
+          if (status.sessionStatus === 'accepted' && config.autoCreatePeerOnAccept && !peerRef.value) {
+            addLog(
+              'info',
+              'Session ternyata sudah accepted saat resync HTTP, jadi setup peer dilanjutkan tanpa menunggu event WS awal.',
+              { sessionId: config.sessionId },
+            )
+            await createPeerConnection()
+          }
+        }
       }
     } catch (error) {
       status.requestState = 'error'
@@ -805,7 +1099,8 @@ export function useRemoteDesktopSimulator() {
     }
   }
 
-  const loadSessionDetail = async () => {
+  const loadSessionDetail = async (options = {}) => {
+    const { silentIfRequested = false, preserveCurrentStep = false } = options
     clearError()
     if (!config.sessionId) {
       setError('Isi session ID dulu untuk ambil detail session.')
@@ -834,7 +1129,13 @@ export function useRemoteDesktopSimulator() {
       const data = resolveEnvelope(payload)
       syncSession(data)
       status.requestState = 'success'
+      if (silentIfRequested && status.sessionStatus === 'requested') {
+        addLog('info', 'Detail session di-resync dan masih berada pada status requested.', data)
+      }
       addLog('success', 'Detail session berhasil di-refresh.', data)
+      if (!preserveCurrentStep) {
+        status.currentStep = 'session_synced'
+      }
     } catch (error) {
       status.requestState = 'error'
       setError(error.message, { requestId: status.requestId })
@@ -915,6 +1216,7 @@ export function useRemoteDesktopSimulator() {
       alt: event.altKey,
       shift: event.shiftKey,
       meta: event.metaKey,
+      repeat: event.repeat,
       timestamp: Date.now(),
     })
   }
@@ -994,6 +1296,8 @@ export function useRemoteDesktopSimulator() {
   })
 
   return proxyRefs({
+    applyStunOnlyPreset,
+    applyTurnPreset,
     canInteract,
     config,
     controlReady,
@@ -1006,6 +1310,7 @@ export function useRemoteDesktopSimulator() {
     handleMouseMove,
     handleWheel,
     hasSession,
+    iceConfigSummary,
     isTerminal,
     loadSessionDetail,
     logs,
