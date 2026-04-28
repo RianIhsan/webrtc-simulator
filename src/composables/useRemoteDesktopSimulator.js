@@ -213,6 +213,7 @@ export function useRemoteDesktopSimulator() {
   const pendingRemoteIceCandidates = ref([])
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
+  const bootstrapControlChannelRef = ref(null)
 
   const addLog = (level, message, detail = null) => {
     logs.value = [createLogEntry(level, message, detail), ...logs.value].slice(0, 120)
@@ -669,6 +670,30 @@ const normalizeIceTransportPolicy = () => {
         attachDataChannel(event.channel)
       }
 
+      // Keep one local bootstrap channel so the SDP offer still includes
+      // the application/datachannel m-line expected by the current agent.
+      // We do not use this channel for control messages; FE will bind to the
+      // inbound control channel created by the agent.
+      const bootstrapChannel = peer.createDataChannel('control-bootstrap', {
+        ordered: true,
+      })
+      bootstrapControlChannelRef.value = bootstrapChannel
+      bootstrapChannel.onopen = () => {
+        addLog('info', 'Bootstrap datachannel terbuka.', {
+          label: bootstrapChannel.label,
+          readyState: bootstrapChannel.readyState,
+        })
+      }
+      bootstrapChannel.onclose = () => {
+        addLog('info', 'Bootstrap datachannel tertutup.', {
+          label: bootstrapChannel.label,
+          readyState: bootstrapChannel.readyState,
+        })
+      }
+      bootstrapChannel.onerror = (event) => {
+        addLog('warning', 'Bootstrap datachannel error.', event)
+      }
+
       peerRef.value = peer
       updatePeerState()
       status.peerStatus = 'ready'
@@ -833,6 +858,17 @@ const normalizeIceTransportPolicy = () => {
   }
 
   const cleanupPeerConnection = () => {
+    if (bootstrapControlChannelRef.value) {
+      bootstrapControlChannelRef.value.onopen = null
+      bootstrapControlChannelRef.value.onclose = null
+      bootstrapControlChannelRef.value.onerror = null
+      bootstrapControlChannelRef.value.onmessage = null
+      if (bootstrapControlChannelRef.value.readyState === 'open') {
+        bootstrapControlChannelRef.value.close()
+      }
+      bootstrapControlChannelRef.value = null
+    }
+
     if (controlChannelRef.value) {
       controlChannelRef.value.onopen = null
       controlChannelRef.value.onclose = null
