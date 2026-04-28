@@ -50,7 +50,7 @@ const stepCards = computed(() => [
     title: 'Step 3',
     label: 'Setup peer + control channel',
     description:
-      'Buat RTCPeerConnection, daftarkan handler, lalu buka datachannel `control` untuk keyboard dan mouse.',
+      'Buat RTCPeerConnection, daftarkan handler, lalu tunggu datachannel `control` dari agent untuk keyboard dan mouse.',
   },
   {
     id: 'send-offer',
@@ -98,7 +98,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
         <h1>Web RTC Simulator</h1>
         <p class="hero-text">
           Flow-nya sudah disusun mengikuti PDF di folder <code>docs</code>: create session, connect websocket,
-          signaling offer-answer-ICE, render remote stream, buka datachannel control, lalu kirim keyboard dan
+          signaling offer-answer-ICE, render remote stream, terima datachannel control dari agent, lalu kirim keyboard dan
           mouse event ke agent.
         </p>
       </div>
@@ -303,7 +303,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <strong>{{ simulator.status.remoteStreamState === 'active' ? 'Live screen' : 'Waiting screen' }}</strong>
               <p>
                 Focus area ini lalu gunakan keyboard, mouse move, click, dan wheel. Event hanya dikirim saat
-                datachannel `control` sudah open dan session status sudah connected.
+                datachannel `control` dari agent sudah open dan session status sudah connected.
               </p>
             </div>
           </div>

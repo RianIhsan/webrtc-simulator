@@ -570,6 +570,10 @@ const normalizeIceTransportPolicy = () => {
 
     controlChannelRef.value = channel
     status.controlChannelState = channel.readyState
+    addLog('info', 'Binding datachannel control.', {
+      label: channel.label,
+      readyState: channel.readyState,
+    })
 
     channel.onopen = () => {
       status.controlChannelState = channel.readyState
@@ -664,12 +668,6 @@ const normalizeIceTransportPolicy = () => {
         addLog('info', `Remote datachannel diterima: ${event.channel.label}`)
         attachDataChannel(event.channel)
       }
-
-      attachDataChannel(
-        peer.createDataChannel('control', {
-          ordered: true,
-        }),
-      )
 
       peerRef.value = peer
       updatePeerState()
