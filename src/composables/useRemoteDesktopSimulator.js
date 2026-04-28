@@ -231,9 +231,12 @@ export function useRemoteDesktopSimulator() {
   const hasSession = computed(() => Boolean(config.sessionId))
   const isTerminal = computed(() => TERMINAL_SESSION_STATUSES.has(status.sessionStatus))
   const controlReady = computed(() => status.controlChannelState === 'open')
-  const canInteract = computed(
-    () => controlReady.value && status.sessionStatus === 'connected' && status.remoteStreamState === 'active',
-  )
+  const canInteract = computed(() => {
+    const transportReady =
+      status.connectionState === 'connected' || status.sessionStatus === 'connected'
+
+    return controlReady.value && transportReady && status.remoteStreamState === 'active'
+  })
   const parsedIceServers = computed(() => parseIceServers())
   const iceConfigSummary = computed(() => {
     const servers = parsedIceServers.value

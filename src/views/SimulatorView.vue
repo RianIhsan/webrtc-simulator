@@ -302,8 +302,8 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             <div class="remote-overlay">
               <strong>{{ simulator.status.remoteStreamState === 'active' ? 'Live screen' : 'Waiting screen' }}</strong>
               <p>
-                Focus area ini lalu gunakan keyboard, mouse move, click, dan wheel. Event hanya dikirim saat
-                datachannel `control` dari agent sudah open dan session status sudah connected.
+                Focus area ini lalu gunakan keyboard, mouse move, click, dan wheel. Event dikirim saat datachannel
+                `control` sudah open, stream sudah aktif, dan koneksi WebRTC agent sudah connected.
               </p>
             </div>
           </div>
