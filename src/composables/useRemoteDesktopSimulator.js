@@ -201,6 +201,7 @@ export function useRemoteDesktopSimulator() {
 
   const session = ref(null)
   const logs = ref([])
+  const remoteStageElement = ref(null)
   const remoteVideoElement = ref(null)
   const remoteStream = ref(null)
   const eventHistory = ref([])
@@ -302,58 +303,56 @@ export function useRemoteDesktopSimulator() {
     return Array.isArray(parsed) ? parsed : []
   }
 
-  const normalizeIceTransportPolicy = () => {
-    const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : ''
-    return value === 'all' ? 'all' : 'relay'
-  }
-
+const normalizeIceTransportPolicy = () => {
+  const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : '';
+  return value === 'all' ? 'all' : 'relay';
+}
   const buildStunOnlyIceServers = () => [{ urls: 'stun:stun.l.google.com:19302' }]
 
   const applyStunOnlyPreset = () => {
-    config.iceServersJson = JSON.stringify(buildStunOnlyIceServers(), null, 2)
-    config.iceTransportPolicy = 'all'
-    addLog('info', 'Preset ICE STUN-only diterapkan ke simulator.', {
-      mode: 'stun-only',
-      iceTransportPolicy: config.iceTransportPolicy,
-    })
-  }
+  config.iceServersJson = JSON.stringify(buildStunOnlyIceServers(), null, 2);
+  config.iceTransportPolicy = 'all';
+  addLog('info', 'Preset ICE STUN-only diterapkan ke simulator.', {
+    mode: 'stun-only',
+    iceTransportPolicy: config.iceTransportPolicy,
+  });
+}
 
   const applyTurnPreset = () => {
-    const turnUrls = parseJson(config.turnUrlsJson, [])
-    const urls = Array.isArray(turnUrls) ? turnUrls.filter((url) => typeof url === 'string' && url.trim()) : []
+  const turnUrls = parseJson(config.turnUrlsJson, []);
+  const urls = Array.isArray(turnUrls) ? turnUrls.filter((url) => typeof url === 'string' && url.trim()) : [];
 
-    if (urls.length === 0) {
-      setError('TURN URLs JSON belum valid. Isi array URL TURN dulu.')
-      return
-    }
-
-    if (!config.turnUsername || !config.turnCredential) {
-      setError('TURN username dan credential wajib diisi sebelum menerapkan preset TURN.')
-      return
-    }
-
-    config.iceServersJson = JSON.stringify(
-      [
-        ...buildStunOnlyIceServers(),
-        {
-          urls,
-          username: config.turnUsername,
-          credential: config.turnCredential,
-        },
-      ],
-      null,
-      2,
-    )
-    config.iceTransportPolicy = 'relay'
-
-    addLog('info', 'Preset ICE STUN + TURN diterapkan ke simulator.', {
-      mode: 'stun+turn',
-      turnUrlCount: urls.length,
-      turnExpiresAt: config.turnExpiresAt || null,
-      iceTransportPolicy: config.iceTransportPolicy,
-    })
+  if (urls.length === 0) {
+    setError('TURN URLs JSON belum valid. Isi array URL TURN dulu.');
+    return;
   }
 
+  if (!config.turnUsername || !config.turnCredential) {
+    setError('TURN username dan credential wajib diisi sebelum menerapkan preset TURN.');
+    return;
+  }
+
+  config.iceServersJson = JSON.stringify(
+    [
+      ...buildStunOnlyIceServers(),
+      {
+        urls,
+        username: config.turnUsername,
+        credential: config.turnCredential,
+      },
+    ],
+    null,
+    2,
+  );
+  config.iceTransportPolicy = 'relay';
+
+  addLog('info', 'Preset ICE STUN + TURN diterapkan ke simulator.', {
+    mode: 'stun+turn',
+    turnUrlCount: urls.length,
+    turnExpiresAt: config.turnExpiresAt || null,
+    iceTransportPolicy: config.iceTransportPolicy,
+  });
+}
   const syncRemoteDescriptionFlag = () => {
     status.hasRemoteDescription = Boolean(peerRef.value?.remoteDescription)
   }
@@ -453,6 +452,10 @@ export function useRemoteDesktopSimulator() {
     controlChannelRef.value.send(JSON.stringify(payload))
     addLog('control', `DC -> ${payload.type}`, payload)
     return true
+  }
+
+  const focusRemoteStage = () => {
+    remoteStageElement.value?.focus?.()
   }
 
   const handleIncomingIceCandidate = async (candidate) => {
@@ -1192,10 +1195,52 @@ export function useRemoteDesktopSimulator() {
     resetSessionRuntimeState({ preserveSessionId: true })
   }
 
+  const getRenderedVideoRect = (fallbackTarget) => {
+    const videoElement = remoteVideoElement.value
+    const fallbackRect = fallbackTarget?.getBoundingClientRect?.()
+
+    if (!videoElement) {
+      return fallbackRect
+    }
+
+    const rect = videoElement.getBoundingClientRect()
+    const videoWidth = videoElement.videoWidth
+    const videoHeight = videoElement.videoHeight
+
+    if (!videoWidth || !videoHeight || rect.width === 0 || rect.height === 0) {
+      return rect.width > 0 && rect.height > 0 ? rect : fallbackRect
+    }
+
+    const containerAspect = rect.width / rect.height
+    const videoAspect = videoWidth / videoHeight
+
+    if (containerAspect > videoAspect) {
+      const width = rect.height * videoAspect
+      const left = rect.left + (rect.width - width) / 2
+
+      return {
+        left,
+        top: rect.top,
+        width,
+        height: rect.height,
+      }
+    }
+
+    const height = rect.width / videoAspect
+    const top = rect.top + (rect.height - height) / 2
+
+    return {
+      left: rect.left,
+      top,
+      width: rect.width,
+      height,
+    }
+  }
+
   const normalizedCoordinates = (event) => {
-    const rect = event.currentTarget.getBoundingClientRect()
-    const x = rect.width === 0 ? 0 : (event.clientX - rect.left) / rect.width
-    const y = rect.height === 0 ? 0 : (event.clientY - rect.top) / rect.height
+    const rect = getRenderedVideoRect(event.currentTarget)
+    const x = rect?.width ? (event.clientX - rect.left) / rect.width : 0
+    const y = rect?.height ? (event.clientY - rect.top) / rect.height : 0
 
     return {
       x: Number(Math.min(1, Math.max(0, x)).toFixed(4)),
@@ -1244,6 +1289,7 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    focusRemoteStage()
     sendControlEvent({
       type,
       button: event.button,
@@ -1257,6 +1303,7 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    focusRemoteStage()
     sendControlEvent({
       type: 'mouse.wheel',
       delta_x: event.deltaX,
@@ -1264,6 +1311,10 @@ export function useRemoteDesktopSimulator() {
       ...normalizedCoordinates(event),
       timestamp: Date.now(),
     })
+  }
+
+  const setRemoteStageElement = (element) => {
+    remoteStageElement.value = element
   }
 
   const setRemoteVideoElement = (element) => {
@@ -1316,9 +1367,11 @@ export function useRemoteDesktopSimulator() {
     logs,
     runStep,
     session,
+    setRemoteStageElement,
     setRemoteVideoElement,
     status,
     terminateSession,
     connectSocket,
+    focusRemoteStage,
   })
 }

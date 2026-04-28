@@ -1,8 +1,34 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { useRemoteDesktopSimulator } from '../composables/useRemoteDesktopSimulator'
 
 const simulator = useRemoteDesktopSimulator()
+
+// State untuk modal fullscreen screen viewer
+const showScreenModal = ref(false)
+
+// Ref untuk video di modal agar bisa di-set sebagai remote video element
+const modalVideoRef = ref(null)
+
+// Ketika modal dibuka, set video element ke simulator agar kontrol tetap aktif
+const openScreenModal = async () => {
+  showScreenModal.value = true
+  await nextTick()
+  if (modalVideoRef.value) {
+    simulator.setRemoteVideoElement(modalVideoRef.value)
+  }
+}
+
+// Ketika modal ditutup, kembalikan video element utama
+const closeScreenModal = async () => {
+  showScreenModal.value = false
+  await nextTick()
+  // Kembalikan ke video utama jika ada
+  const mainVideo = document.querySelector('.remote-video')
+  if (mainVideo) {
+    simulator.setRemoteVideoElement(mainVideo)
+  }
+}
 
 const stepCards = computed(() => [
   {
@@ -254,22 +280,25 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
           </div>
 
           <div
+            :ref="simulator.setRemoteStageElement"
             class="remote-stage"
             tabindex="0"
             @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
             @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
             @mousemove="simulator.handleMouseMove"
+            @click="simulator.focusRemoteStage"
             @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
             @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
             @wheel.prevent="simulator.handleWheel"
+            @contextmenu.prevent
           >
-            <video
-              :ref="simulator.setRemoteVideoElement"
-              autoplay
-              playsinline
-              muted
-              class="remote-video"
-            />
+              <video
+                :ref="simulator.setRemoteVideoElement"
+                autoplay
+                playsinline
+                muted
+                class="remote-video"
+              />
             <div class="remote-overlay">
               <strong>{{ simulator.status.remoteStreamState === 'active' ? 'Live screen' : 'Waiting screen' }}</strong>
               <p>
@@ -286,8 +315,42 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             <button class="ghost-button" type="button" @click="simulator.terminateSession('both')">
               Force terminate WS + HTTP
             </button>
+              <button
+                v-if="simulator.status.remoteStreamState === 'active'"
+                class="primary-button"
+                type="button"
+                @click="openScreenModal"
+              >
+                Perbesar layar
+              </button>
           </div>
         </article>
+
+          <!-- Modal fullscreen screen viewer -->
+          <div v-if="showScreenModal" class="modal-backdrop" @click.self="closeScreenModal">
+            <div
+              class="modal-screen-viewer"
+              tabindex="0"
+              @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
+              @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
+              @mousemove="simulator.handleMouseMove"
+              @click="simulator.focusRemoteStage"
+              @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
+              @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
+              @wheel.prevent="simulator.handleWheel"
+              @contextmenu.prevent
+            >
+              <video
+                ref="modalVideoRef"
+                autoplay
+                playsinline
+                muted
+                class="modal-remote-video"
+                style="width: 100%; height: 100%; object-fit: contain; background: #111;"
+              />
+              <button class="close-modal-btn" type="button" @click="closeScreenModal">Tutup</button>
+            </div>
+          </div>
       </div>
 
       <div class="right-column">
@@ -356,6 +419,58 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
     </section>
   </main>
 </template>
+
+<style scoped>
+/* Modal styles */
+.modal-backdrop {
+  position: fixed;
+  z-index: 1000;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-screen-viewer {
+  position: relative;
+  width: 90vw;
+  height: 80vh;
+  background: #181818;
+  border-radius: 18px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.32);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+.modal-remote-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #111;
+}
+.close-modal-btn {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 1rem;
+  cursor: pointer;
+  z-index: 2;
+}
+.close-modal-btn:hover {
+  background: rgba(255,255,255,0.22);
+}
+</style>
 
 <style scoped>
 .simulator-page {
@@ -695,6 +810,7 @@ button:hover {
   border-radius: 18px;
   background: rgba(7, 7, 10, 0.54);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  pointer-events: none;
 }
 
 .remote-overlay strong {
