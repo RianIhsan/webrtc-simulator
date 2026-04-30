@@ -220,6 +220,7 @@ export function useRemoteDesktopSimulator() {
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
   const bootstrapControlChannelRef = ref(null)
+  const videoTransceiverRef = ref(null)
   const statsPollTimer = ref(null)
   const previousInboundVideoStats = ref({
     bytesReceived: 0,
@@ -1066,6 +1067,13 @@ const normalizeIceTransportPolicy = () => {
         iceServerCount: parseIceServers().length,
       })
 
+      if (typeof peer.addTransceiver === 'function') {
+        videoTransceiverRef.value = peer.addTransceiver('video', {
+          direction: 'recvonly',
+        })
+        addLog('info', 'Transceiver video recvonly ditambahkan ke peer connection.')
+      }
+
       peer.onicecandidate = (event) => {
         if (!event.candidate) {
           addLog('info', 'ICE gathering selesai.')
@@ -1087,14 +1095,40 @@ const normalizeIceTransportPolicy = () => {
         optimizeTrackForRealtimePlayback(event.track)
         optimizeReceiverForLowLatency(event.receiver)
         remoteStream.value = event.streams[0] ?? new MediaStream([event.track])
-        status.remoteStreamState = 'active'
-        status.currentStep = 'screen_live'
-        addLog('success', 'Remote track diterima dan dirender ke video.', {
+        status.remoteStreamState = event.track.muted ? 'pending_media' : 'active'
+        status.currentStep = event.track.muted ? 'track_received' : 'screen_live'
+        addLog('success', 'Remote track diterima dan dipasang ke elemen video.', {
           kind: event.track.kind,
           streamId: remoteStream.value?.id,
+          muted: event.track.muted,
           contentHint: event.track.contentHint ?? null,
           playoutDelayHint: event.receiver?.playoutDelayHint ?? null,
         })
+
+        event.track.onunmute = () => {
+          status.remoteStreamState = 'active'
+          status.currentStep = 'screen_live'
+          addLog('success', 'Track video mulai mengalir dan frame pertama siap dirender.', {
+            kind: event.track.kind,
+            streamId: remoteStream.value?.id,
+          })
+        }
+
+        event.track.onmute = () => {
+          status.remoteStreamState = 'pending_media'
+          addLog('warning', 'Track remote sedang mute, frame video berhenti sementara.', {
+            kind: event.track.kind,
+            streamId: remoteStream.value?.id,
+          })
+        }
+
+        event.track.onended = () => {
+          status.remoteStreamState = 'ended'
+          addLog('warning', 'Track remote berakhir.', {
+            kind: event.track.kind,
+            streamId: remoteStream.value?.id,
+          })
+        }
       }
 
       peer.onconnectionstatechange = () => {
@@ -1342,6 +1376,8 @@ const normalizeIceTransportPolicy = () => {
       peerRef.value.close()
       peerRef.value = null
     }
+
+    videoTransceiverRef.value = null
 
     status.peerStatus = 'idle'
     status.connectionState = 'closed'
