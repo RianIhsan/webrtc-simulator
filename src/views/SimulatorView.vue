@@ -285,11 +285,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             tabindex="0"
             @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
             @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
-            @mousemove="simulator.handleMouseMove"
             @click="simulator.focusRemoteStage"
-            @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
-            @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
-            @wheel.prevent="simulator.handleWheel"
             @contextmenu.prevent
           >
               <video
@@ -297,7 +293,13 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
                 autoplay
                 playsinline
                 muted
-                class="remote-video"
+                :class="['remote-video', simulator.canInteract ? 'remote-video--interactive' : '']"
+                @mousemove="simulator.handleMouseMove"
+                @click="simulator.focusRemoteStage"
+                @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
+                @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
+                @wheel.prevent="simulator.handleWheel"
+                @contextmenu.prevent
               />
             <div class="remote-overlay">
               <strong>{{ simulator.status.remoteStreamState === 'active' ? 'Live screen' : 'Waiting screen' }}</strong>
@@ -333,11 +335,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               tabindex="0"
               @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
               @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
-              @mousemove="simulator.handleMouseMove"
               @click="simulator.focusRemoteStage"
-              @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
-              @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
-              @wheel.prevent="simulator.handleWheel"
               @contextmenu.prevent
             >
               <video
@@ -345,7 +343,13 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
                 autoplay
                 playsinline
                 muted
-                class="modal-remote-video"
+                :class="['modal-remote-video', simulator.canInteract ? 'modal-remote-video--interactive' : '']"
+                @mousemove="simulator.handleMouseMove"
+                @click="simulator.focusRemoteStage"
+                @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
+                @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
+                @wheel.prevent="simulator.handleWheel"
+                @contextmenu.prevent
                 style="width: 100%; height: 100%; object-fit: contain; background: #111;"
               />
               <button class="close-modal-btn" type="button" @click="closeScreenModal">Tutup</button>
@@ -799,6 +803,11 @@ button:hover {
   min-height: 420px;
   object-fit: contain;
   display: block;
+}
+
+.remote-video--interactive,
+.modal-remote-video--interactive {
+  cursor: none;
 }
 
 .remote-overlay {
