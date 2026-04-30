@@ -1,34 +1,8 @@
 <script setup>
-import { computed, ref, nextTick } from 'vue'
+import { computed } from 'vue'
 import { useRemoteDesktopSimulator } from '../composables/useRemoteDesktopSimulator'
 
 const simulator = useRemoteDesktopSimulator()
-
-// State untuk modal fullscreen screen viewer
-const showScreenModal = ref(false)
-
-// Ref untuk video di modal agar bisa di-set sebagai remote video element
-const modalVideoRef = ref(null)
-
-// Ketika modal dibuka, set video element ke simulator agar kontrol tetap aktif
-const openScreenModal = async () => {
-  showScreenModal.value = true
-  await nextTick()
-  if (modalVideoRef.value) {
-    simulator.setRemoteVideoElement(modalVideoRef.value)
-  }
-}
-
-// Ketika modal ditutup, kembalikan video element utama
-const closeScreenModal = async () => {
-  showScreenModal.value = false
-  await nextTick()
-  // Kembalikan ke video utama jika ada
-  const mainVideo = document.querySelector('.remote-video')
-  if (mainVideo) {
-    simulator.setRemoteVideoElement(mainVideo)
-  }
-}
 
 const stepCards = computed(() => [
   {
@@ -66,7 +40,6 @@ const statusItems = computed(() => [
   ['Socket', simulator.status.socketStatus],
   ['Peer', simulator.status.peerStatus],
   ['Connection', simulator.status.connectionState],
-  ['Signaling', simulator.status.signalingState],
   ['Control', simulator.status.controlChannelState],
   ['Stream', simulator.status.remoteStreamState],
 ])
@@ -87,6 +60,33 @@ const sessionFacts = computed(() => [
   ['Last answer', simulator.status.latestAnswerAt || '-'],
 ])
 
+const selectedDeviceSummary = computed(() => {
+  return simulator.devices.find((device) => device.id === simulator.config.deviceId) ?? null
+})
+
+const viewerFacts = computed(() => [
+  ['Viewer status', simulator.screenReady ? 'ready to open' : 'standby'],
+  ['Signal quality', simulator.stats.qualityLabel || '-'],
+  ['FPS', simulator.stats.fps ?? '-'],
+  ['Bitrate', simulator.stats.bitrateKbps ? `${simulator.stats.bitrateKbps} kbps` : '-'],
+  ['RTT', simulator.stats.roundTripTimeMs ? `${simulator.stats.roundTripTimeMs} ms` : '-'],
+  ['Resolution', simulator.stats.frameWidth && simulator.stats.frameHeight ? `${simulator.stats.frameWidth} x ${simulator.stats.frameHeight}` : '-'],
+])
+
+const viewerUrl = computed(() => {
+  const url = new URL(window.location.href)
+  url.searchParams.set('viewer', '1')
+  if (simulator.config.sessionId) {
+    url.searchParams.set('session_id', simulator.config.sessionId)
+  }
+  return url.toString()
+})
+
+const openViewerTab = () => {
+  const viewerWindow = window.open(viewerUrl.value, '_blank', 'noopener=no,noreferrer=no')
+  viewerWindow?.focus?.()
+}
+
 const logLevelClass = (level) => `log-entry log-entry--${level}`
 </script>
 
@@ -97,9 +97,8 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
         <p class="eyebrow">Frontend Remote Desktop Simulator</p>
         <h1>Web RTC Simulator</h1>
         <p class="hero-text">
-          Flow-nya sudah disusun mengikuti PDF di folder <code>docs</code>: create session, connect websocket,
-          signaling offer-answer-ICE, render remote stream, terima datachannel control dari agent, lalu kirim keyboard dan
-          mouse event ke agent.
+          Screen tidak langsung dirender di halaman ini. Setelah stream dan control sudah siap, operator membuka viewer
+          terpisah di tab baru untuk mode fullscreen dan monitoring kualitas koneksi.
         </p>
       </div>
 
@@ -134,12 +133,25 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <input v-model="simulator.config.wsPath" placeholder="/ws/remote-desktop" />
             </label>
             <label>
+              <span>Login email</span>
+              <input v-model="simulator.config.loginEmail" type="email" placeholder="superadmin@sentuh.id" />
+            </label>
+            <label>
+              <span>Login password</span>
+              <input v-model="simulator.config.loginPassword" type="password" placeholder="password login" />
+            </label>
+            <label>
               <span>Access token</span>
               <input v-model="simulator.config.accessToken" placeholder="Bearer token" />
             </label>
             <label>
-              <span>Device ID</span>
-              <input v-model="simulator.config.deviceId" placeholder="device-001" />
+              <span>Device</span>
+              <select v-model="simulator.config.deviceId">
+                <option value="">Pilih device</option>
+                <option v-for="device in simulator.devices" :key="device.id" :value="device.id">
+                  {{ device.name }} | {{ device.deviceType }} | {{ device.status }}
+                </option>
+              </select>
             </label>
             <label>
               <span>Session ID manual</span>
@@ -157,6 +169,52 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <span>Metadata page</span>
               <input v-model="simulator.config.metadataPage" />
             </label>
+          </div>
+
+          <div class="action-row">
+            <button
+              class="primary-button"
+              type="button"
+              :disabled="simulator.status.authState === 'loading'"
+              @click="simulator.generateAccessToken"
+            >
+              {{ simulator.status.authState === 'loading' ? 'Generating token...' : 'Generate token' }}
+            </button>
+            <button
+              class="secondary-button"
+              type="button"
+              :disabled="!simulator.config.accessToken || simulator.status.devicesState === 'loading'"
+              @click="simulator.loadDevices"
+            >
+              {{ simulator.status.devicesState === 'loading' ? 'Loading devices...' : 'Refresh devices' }}
+            </button>
+          </div>
+
+          <div class="auth-summary">
+            <span :class="['badge', simulator.status.authState === 'success' ? 'badge--success' : 'badge--muted']">
+              auth {{ simulator.status.authState }}
+            </span>
+            <span :class="['badge', simulator.status.devicesState === 'success' ? 'badge--success' : 'badge--muted']">
+              devices {{ simulator.status.devicesState }}
+            </span>
+            <span class="auth-summary__hint">
+              {{ simulator.devices.length }} device loaded
+            </span>
+          </div>
+
+          <div v-if="selectedDeviceSummary" class="device-summary">
+            <strong>{{ selectedDeviceSummary.name }}</strong>
+            <p>
+              {{ selectedDeviceSummary.deviceType }} | status {{ selectedDeviceSummary.status }} | IP
+              {{ selectedDeviceSummary.ipAddress }}
+            </p>
+            <p>
+              Tenant {{ selectedDeviceSummary.tenantId }}<span v-if="selectedDeviceSummary.networkType">
+                | {{ selectedDeviceSummary.networkType }}
+              </span><span v-if="selectedDeviceSummary.signalStrengthPercent !== null">
+                | signal {{ selectedDeviceSummary.signalStrengthPercent }}%
+              </span>
+            </p>
           </div>
 
           <label class="textarea-field">
@@ -195,12 +253,29 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             </div>
 
             <div class="action-row">
+              <button
+                class="secondary-button"
+                type="button"
+                :disabled="!simulator.config.accessToken || simulator.status.turnState === 'loading'"
+                @click="simulator.loadTurnCredentials"
+              >
+                {{ simulator.status.turnState === 'loading' ? 'Loading TURN...' : 'Fetch TURN credential' }}
+              </button>
               <button class="secondary-button" type="button" @click="simulator.applyStunOnlyPreset">
                 Apply STUN only
               </button>
               <button class="primary-button" type="button" @click="simulator.applyTurnPreset">
                 Apply STUN + TURN
               </button>
+            </div>
+
+            <div class="auth-summary">
+              <span :class="['badge', simulator.status.turnState === 'success' ? 'badge--success' : 'badge--muted']">
+                turn {{ simulator.status.turnState }}
+              </span>
+              <span class="auth-summary__hint">
+                {{ simulator.config.turnExpiresAt ? `expires ${simulator.config.turnExpiresAt}` : 'credential belum dimuat' }}
+              </span>
             </div>
           </div>
 
@@ -267,94 +342,54 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
           <div class="panel-heading">
             <div>
               <p class="panel-kicker">Remote screen</p>
-              <h2>Screen view + control surface</h2>
+              <h2>Viewer launcher</h2>
             </div>
             <div class="remote-flags">
               <span :class="['badge', simulator.controlReady ? 'badge--success' : 'badge--muted']">
                 control {{ simulator.status.controlChannelState }}
               </span>
-              <span :class="['badge', simulator.canInteract ? 'badge--success' : 'badge--warning']">
-                {{ simulator.canInteract ? 'input enabled' : 'input disabled' }}
+              <span :class="['badge', simulator.screenReady ? 'badge--success' : 'badge--warning']">
+                {{ simulator.screenReady ? 'viewer ready' : 'waiting readiness' }}
               </span>
             </div>
           </div>
 
-          <div
-            :ref="simulator.setRemoteStageElement"
-            class="remote-stage"
-            tabindex="0"
-            @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
-            @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
-            @click="simulator.focusRemoteStage"
-            @contextmenu.prevent
-          >
-              <video
-                :ref="simulator.setRemoteVideoElement"
-                autoplay
-                playsinline
-                muted
-                :class="['remote-video', simulator.canInteract ? 'remote-video--interactive' : '']"
-                @mousemove="simulator.handleMouseMove"
-                @click="simulator.focusRemoteStage"
-                @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
-                @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
-                @wheel.prevent="simulator.handleWheel"
-                @contextmenu.prevent
-              />
-            <div class="remote-overlay">
-              <strong>{{ simulator.status.remoteStreamState === 'active' ? 'Live screen' : 'Waiting screen' }}</strong>
+          <div class="viewer-launchpad">
+            <div class="viewer-launchpad__copy">
+              <strong>
+                {{ simulator.screenReady ? 'Screen siap ditampilkan' : 'Screen belum siap ditampilkan' }}
+              </strong>
               <p>
-                Focus area ini lalu gunakan keyboard, mouse move, click, dan wheel. Event dikirim saat datachannel
-                `control` sudah open, stream sudah aktif, dan koneksi WebRTC agent sudah connected.
+                Halaman ini hanya menjaga session, socket, dan peer connection. Screen baru akan dirender ketika operator
+                menekan tombol di bawah dan membuka viewer pada tab terpisah.
               </p>
             </div>
-          </div>
 
-          <div class="action-row">
-            <button class="danger-button" type="button" @click="simulator.terminateSession('ws')">
-              Terminate via WS
-            </button>
-            <button class="ghost-button" type="button" @click="simulator.terminateSession('both')">
-              Force terminate WS + HTTP
-            </button>
+            <dl class="facts-grid facts-grid--compact">
+              <template v-for="[label, value] in viewerFacts" :key="label">
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+              </template>
+            </dl>
+
+            <div class="action-row">
               <button
-                v-if="simulator.status.remoteStreamState === 'active'"
                 class="primary-button"
                 type="button"
-                @click="openScreenModal"
+                :disabled="!simulator.screenReady"
+                @click="openViewerTab"
               >
-                Perbesar layar
+                Tampilkan screen di tab baru
               </button>
-          </div>
-        </article>
-
-          <!-- Modal fullscreen screen viewer -->
-          <div v-if="showScreenModal" class="modal-backdrop" @click.self="closeScreenModal">
-            <div
-              class="modal-screen-viewer"
-              tabindex="0"
-              @keydown.prevent="simulator.handleKeyboard('keyboard.key_down', $event)"
-              @keyup.prevent="simulator.handleKeyboard('keyboard.key_up', $event)"
-              @click="simulator.focusRemoteStage"
-              @contextmenu.prevent
-            >
-              <video
-                ref="modalVideoRef"
-                autoplay
-                playsinline
-                muted
-                :class="['modal-remote-video', simulator.canInteract ? 'modal-remote-video--interactive' : '']"
-                @mousemove="simulator.handleMouseMove"
-                @click="simulator.focusRemoteStage"
-                @mousedown.prevent="simulator.handleMouseButton('mouse.down', $event)"
-                @mouseup.prevent="simulator.handleMouseButton('mouse.up', $event)"
-                @wheel.prevent="simulator.handleWheel"
-                @contextmenu.prevent
-                style="width: 100%; height: 100%; object-fit: contain; background: #111;"
-              />
-              <button class="close-modal-btn" type="button" @click="closeScreenModal">Tutup</button>
+              <button class="danger-button" type="button" @click="simulator.terminateSession('ws')">
+                Terminate via WS
+              </button>
+              <button class="ghost-button" type="button" @click="simulator.terminateSession('both')">
+                Force terminate WS + HTTP
+              </button>
             </div>
           </div>
+        </article>
       </div>
 
       <div class="right-column">
@@ -425,58 +460,6 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
 </template>
 
 <style scoped>
-/* Modal styles */
-.modal-backdrop {
-  position: fixed;
-  z-index: 1000;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0,0,0,0.65);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.modal-screen-viewer {
-  position: relative;
-  width: 90vw;
-  height: 80vh;
-  background: #181818;
-  border-radius: 18px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.32);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  outline: none;
-}
-.modal-remote-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: 12px;
-  background: #111;
-}
-.close-modal-btn {
-  position: absolute;
-  top: 18px;
-  right: 24px;
-  background: rgba(255,255,255,0.12);
-  color: #fff;
-  border: none;
-  border-radius: 999px;
-  padding: 8px 18px;
-  font-size: 1rem;
-  cursor: pointer;
-  z-index: 2;
-}
-.close-modal-btn:hover {
-  background: rgba(255,255,255,0.22);
-}
-</style>
-
-<style scoped>
 .simulator-page {
   width: min(1420px, calc(100% - 32px));
   margin: 0 auto;
@@ -540,11 +523,11 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
 .facts-grid,
 .history-list li,
 .log-entry,
-.remote-stage,
 .toggle-item,
 .textarea-field,
 .config-grid label,
-.turn-helper {
+.turn-helper,
+.viewer-launchpad {
   border: 1px solid var(--line);
   background: var(--panel-soft);
   border-radius: 20px;
@@ -646,6 +629,7 @@ label span {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -657,8 +641,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus,
-.remote-stage:focus {
+select:focus,
+textarea:focus {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 3px rgba(255, 179, 71, 0.15);
 }
@@ -719,8 +703,8 @@ textarea {
 }
 
 .step-card p,
-.remote-overlay p,
-.empty-state {
+.empty-state,
+.viewer-launchpad__copy p {
   margin: 0;
   color: var(--muted);
 }
@@ -742,8 +726,13 @@ button {
     background 180ms ease;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .primary-button {
@@ -761,10 +750,6 @@ button:hover {
 .danger-button {
   background: rgba(255, 123, 123, 0.18);
   color: #ffd0d0;
-}
-
-.remote-panel {
-  overflow: hidden;
 }
 
 .badge {
@@ -788,43 +773,63 @@ button:hover {
   color: var(--muted);
 }
 
-.remote-stage {
-  position: relative;
-  min-height: 420px;
+.auth-summary,
+.device-summary {
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  border-radius: 18px;
+}
+
+.auth-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+
+.auth-summary__hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.device-summary {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  margin-top: 14px;
+}
+
+.device-summary strong,
+.device-summary p {
+  margin: 0;
+}
+
+.device-summary p {
+  color: var(--muted);
+}
+
+.remote-panel {
   overflow: hidden;
+}
+
+.viewer-launchpad {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
   background:
     linear-gradient(180deg, rgba(37, 29, 28, 0.92), rgba(12, 12, 16, 0.96)),
     radial-gradient(circle at center, rgba(110, 168, 254, 0.1), transparent 55%);
-  outline: none;
 }
 
-.remote-video {
-  width: 100%;
-  min-height: 420px;
-  object-fit: contain;
-  display: block;
+.viewer-launchpad__copy {
+  display: grid;
+  gap: 8px;
 }
 
-.remote-video--interactive,
-.modal-remote-video--interactive {
-  cursor: none;
-}
-
-.remote-overlay {
-  position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 20px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(7, 7, 10, 0.54);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  pointer-events: none;
-}
-
-.remote-overlay strong {
-  display: block;
-  margin-bottom: 6px;
+.viewer-launchpad__copy strong {
+  font-size: 1.15rem;
 }
 
 .facts-grid {
@@ -833,6 +838,10 @@ button:hover {
   gap: 10px 14px;
   padding: 16px;
   margin: 0;
+}
+
+.facts-grid--compact {
+  grid-template-columns: minmax(0, 150px) 1fr;
 }
 
 .facts-grid dt,
@@ -879,82 +888,28 @@ button:hover {
   margin-top: 10px;
   white-space: pre-wrap;
   word-break: break-word;
-  padding: 12px;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.28);
-  color: #ffd9a5;
-  font-family: 'IBM Plex Mono', 'Fira Code', monospace;
-  font-size: 0.82rem;
-}
-
-.hero-text code {
-  display: inline;
-  margin: 0;
-  padding: 3px 8px;
 }
 
 .log-head {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
-}
-
-.log-entry--success {
-  border-color: rgba(99, 212, 169, 0.28);
+  gap: 12px;
 }
 
 .log-entry--error {
-  border-color: rgba(255, 123, 123, 0.36);
+  border-color: rgba(255, 123, 123, 0.35);
 }
 
-.log-entry--warning {
-  border-color: rgba(255, 209, 102, 0.36);
+.log-entry--success {
+  border-color: rgba(99, 212, 169, 0.32);
 }
 
-.empty-state {
-  padding: 18px 0 4px;
-}
-
-@media (max-width: 1100px) {
+@media (max-width: 1080px) {
   .hero-panel,
-  .workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .hero-copy h1 {
-    max-width: none;
-  }
-}
-
-@media (max-width: 760px) {
-  .simulator-page {
-    width: min(100% - 20px, 1420px);
-    padding-top: 20px;
-  }
-
-  .hero-panel,
-  .panel {
-    padding: 18px;
-    border-radius: 22px;
-  }
-
+  .workspace-grid,
   .config-grid,
   .steps-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .panel-heading,
-  .log-head {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .remote-stage,
-  .remote-video {
-    min-height: 280px;
-  }
-
-  .facts-grid {
     grid-template-columns: 1fr;
   }
 }

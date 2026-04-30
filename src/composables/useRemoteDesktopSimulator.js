@@ -149,10 +149,13 @@ function buildSocketUrl(path, sessionId, token) {
 
 export function useRemoteDesktopSimulator() {
   const config = reactive({
-    apiBaseUrl: 'http://152.42.216.177:8888/api/v1',
-    wsPath: 'ws://152.42.216.177:8888/ws/remote-desktop',
-    accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4MjExYmMzYy1hODM4LTQ5MzMtYjM5ZS0xYjVhNDdjMDY5ZmIiLCJlbWFpbCI6InN1cGVyYWRtaW5Ac2VudHVoLmlkIiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzc3MDE4OTQ4LCJleHAiOjE3NzcxMDUzNDh9._wseiWbHNp3TjYFezAiPj7NWYV-5BiER1wpHNCjj_Dw',
-    deviceId: 'd7c5a235-5117-4d4a-a05a-5978c4aadf9a',
+    apiBaseUrl: 'https://apidms.sentuhdigital.id/api/v1',
+    wsPath: 'wss://apidms.sentuhdigital.id/ws/remote-desktop',
+    accessToken: '',
+    refreshToken: '',
+    loginEmail: 'superadmin@sentuh.id',
+    loginPassword: '12345678',
+    deviceId: '',
     sessionId: '',
     timeoutSeconds: 1000,
     metadataSource: 'web',
@@ -197,6 +200,9 @@ export function useRemoteDesktopSimulator() {
     wsMessageCount: 0,
     lastWsEventAt: '',
     lastWsRawPreview: '',
+    authState: 'idle',
+    devicesState: 'idle',
+    turnState: 'idle',
   })
 
   const session = ref(null)
@@ -214,6 +220,25 @@ export function useRemoteDesktopSimulator() {
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
   const bootstrapControlChannelRef = ref(null)
+  const statsPollTimer = ref(null)
+  const previousInboundVideoStats = ref({
+    bytesReceived: 0,
+    framesDecoded: 0,
+    timestamp: 0,
+  })
+  const stats = reactive({
+    fps: null,
+    bitrateKbps: null,
+    packetsLost: null,
+    jitterMs: null,
+    roundTripTimeMs: null,
+    availableOutgoingBitrateKbps: null,
+    frameWidth: null,
+    frameHeight: null,
+    qualityLabel: 'offline',
+    updatedAt: '',
+  })
+  const devices = ref([])
 
   const optimizeVideoElementForRealtimePlayback = (element) => {
     if (!element) {
@@ -281,6 +306,7 @@ export function useRemoteDesktopSimulator() {
 
     return controlReady.value && transportReady && status.remoteStreamState === 'active'
   })
+  const screenReady = computed(() => canInteract.value)
   const parsedIceServers = computed(() => parseIceServers())
   const iceConfigSummary = computed(() => {
     const servers = parsedIceServers.value
@@ -353,6 +379,26 @@ export function useRemoteDesktopSimulator() {
     return Array.isArray(parsed) ? parsed : []
   }
 
+  const normalizeDeviceOptions = (items) => {
+    if (!Array.isArray(items)) {
+      return []
+    }
+
+    return items
+      .filter((item) => item && typeof item === 'object' && typeof item.id === 'string')
+      .map((item) => ({
+        id: item.id,
+        name: item.name ?? item.hostname ?? item.serial_number ?? item.id,
+        status: item.status ?? 'unknown',
+        deviceType: item.device_type ?? '-',
+        tenantId: item.tenant_id ?? '-',
+        ipAddress: item.ip_address ?? item.health?.ip_address ?? '-',
+        signalStrengthPercent: item.health?.signal_strength_percent ?? null,
+        networkType: item.health?.network_type ?? null,
+        raw: item,
+      }))
+  }
+
 const normalizeIceTransportPolicy = () => {
   const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : '';
   return value === 'all' ? 'all' : 'relay';
@@ -414,6 +460,356 @@ const normalizeIceTransportPolicy = () => {
   const clearSignalingWatchdog = () => {
     window.clearTimeout(signalingWatchdogTimer.value)
     signalingWatchdogTimer.value = null
+  }
+
+  const resetStats = () => {
+    previousInboundVideoStats.value = {
+      bytesReceived: 0,
+      framesDecoded: 0,
+      timestamp: 0,
+    }
+    stats.fps = null
+    stats.bitrateKbps = null
+    stats.packetsLost = null
+    stats.jitterMs = null
+    stats.roundTripTimeMs = null
+    stats.availableOutgoingBitrateKbps = null
+    stats.frameWidth = null
+    stats.frameHeight = null
+    stats.qualityLabel = 'offline'
+    stats.updatedAt = ''
+  }
+
+  const generateAccessToken = async () => {
+    clearError()
+    status.authState = 'loading'
+
+    try {
+      const url = buildUrl(config.apiBaseUrl, '/auth/login')
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: config.loginEmail,
+          password: config.loginPassword,
+        }),
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      status.requestId = payload?.request_id ?? status.requestId
+
+      if (!response.ok) {
+        throw new Error(payload?.message ?? 'Gagal login untuk generate access token.')
+      }
+
+      const data = resolveEnvelope(payload)
+      const accessToken = data?.access_Token ?? data?.access_token ?? ''
+      const refreshToken = data?.refresh_token ?? ''
+
+      if (!accessToken) {
+        throw new Error('Response login tidak mengandung access token.')
+      }
+
+      config.accessToken = accessToken
+      config.refreshToken = refreshToken
+      status.authState = 'success'
+      addLog('success', 'Access token berhasil di-generate dari API login.', {
+        email: config.loginEmail,
+        hasRefreshToken: Boolean(refreshToken),
+      })
+
+      await loadDevices()
+      return accessToken
+    } catch (error) {
+      status.authState = 'error'
+      setError(error.message, { requestId: status.requestId })
+      return null
+    }
+  }
+
+  const loadDevices = async () => {
+    clearError()
+
+    if (!config.accessToken) {
+      status.devicesState = 'error'
+      setError('Generate access token dulu sebelum mengambil daftar device.')
+      return []
+    }
+
+    status.devicesState = 'loading'
+
+    try {
+      const url = buildUrl(config.apiBaseUrl, '/devices/')
+      url.searchParams.set('limit', '100')
+      url.searchParams.set('offset', '0')
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+        },
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      status.requestId = payload?.request_id ?? status.requestId
+
+      if (!response.ok) {
+        throw new Error(payload?.message ?? 'Gagal mengambil daftar device.')
+      }
+
+      const items = normalizeDeviceOptions(resolveEnvelope(payload))
+      devices.value = items
+      status.devicesState = 'success'
+
+      if (!config.deviceId && items.length > 0) {
+        config.deviceId = items[0].id
+      }
+
+      addLog('success', 'Daftar device berhasil dimuat.', {
+        count: items.length,
+      })
+      return items
+    } catch (error) {
+      status.devicesState = 'error'
+      devices.value = []
+      setError(error.message, { requestId: status.requestId })
+      return []
+    }
+  }
+
+  const loadTurnCredentials = async () => {
+    clearError()
+
+    if (!config.accessToken) {
+      status.turnState = 'error'
+      setError('Generate access token dulu sebelum mengambil credential TURN.')
+      return null
+    }
+
+    status.turnState = 'loading'
+
+    try {
+      const url = buildUrl(config.apiBaseUrl, '/remote-desktop/ice-servers')
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.accessToken}`,
+        },
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      status.requestId = payload?.request_id ?? status.requestId
+
+      if (!response.ok) {
+        throw new Error(payload?.message ?? 'Gagal mengambil credential TURN.')
+      }
+
+      const data = resolveEnvelope(payload)
+      const firstTurnServer = Array.isArray(data?.ice_servers) ? data.ice_servers[0] : null
+      const turnUrls = Array.isArray(firstTurnServer?.urls) ? firstTurnServer.urls : []
+
+      if (turnUrls.length === 0 || !firstTurnServer?.username || !firstTurnServer?.credential) {
+        throw new Error('Response ICE server tidak lengkap untuk credential TURN.')
+      }
+
+      config.turnUrlsJson = JSON.stringify(turnUrls, null, 2)
+      config.turnUsername = firstTurnServer.username
+      config.turnCredential = firstTurnServer.credential
+      config.turnExpiresAt = data?.expires_at ?? ''
+      status.turnState = 'success'
+
+      addLog('success', 'Credential TURN berhasil dimuat dari backend.', {
+        turnUrlCount: turnUrls.length,
+        turnExpiresAt: config.turnExpiresAt || null,
+      })
+
+      return {
+        urls: turnUrls,
+        username: firstTurnServer.username,
+        credential: firstTurnServer.credential,
+        expiresAt: config.turnExpiresAt,
+      }
+    } catch (error) {
+      status.turnState = 'error'
+      setError(error.message, { requestId: status.requestId })
+      return null
+    }
+  }
+
+  const classifyQualityLabel = () => {
+    if (!screenReady.value) {
+      return status.connectionState === 'connected' ? 'warming up' : 'offline'
+    }
+
+    const fps = stats.fps ?? 0
+    const rtt = stats.roundTripTimeMs ?? 0
+    const bitrate = stats.bitrateKbps ?? 0
+
+    if (fps >= 20 && rtt > 0 && rtt <= 120 && bitrate >= 1800) {
+      return 'strong'
+    }
+
+    if (fps >= 10 && rtt <= 250 && bitrate >= 700) {
+      return 'stable'
+    }
+
+    return 'weak'
+  }
+
+  const stopStatsPolling = () => {
+    window.clearInterval(statsPollTimer.value)
+    statsPollTimer.value = null
+  }
+
+  const collectPeerStats = async () => {
+    const peer = peerRef.value
+    if (!peer || typeof peer.getStats !== 'function') {
+      resetStats()
+      return
+    }
+
+    try {
+      const reports = await peer.getStats()
+      let inboundVideoReport = null
+      let trackReport = null
+      let selectedCandidatePair = null
+
+      reports.forEach((report) => {
+        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+          inboundVideoReport = report
+        }
+
+        if (report.type === 'track' && report.kind === 'video') {
+          trackReport = report
+        }
+
+        if (report.type === 'candidate-pair' && (report.nominated || report.selected)) {
+          selectedCandidatePair = report
+        }
+      })
+
+      if (inboundVideoReport) {
+        const previous = previousInboundVideoStats.value
+        const elapsedMs = previous.timestamp ? inboundVideoReport.timestamp - previous.timestamp : 0
+        const bytesDelta = inboundVideoReport.bytesReceived - previous.bytesReceived
+        const framesDelta = inboundVideoReport.framesDecoded - previous.framesDecoded
+
+        if (elapsedMs > 0) {
+          stats.bitrateKbps = Number((((bytesDelta * 8) / elapsedMs) * 1000 / 1024).toFixed(1))
+          stats.fps = Number(((framesDelta * 1000) / elapsedMs).toFixed(1))
+        } else {
+          stats.bitrateKbps = typeof inboundVideoReport.bytesReceived === 'number' ? 0 : null
+          stats.fps = typeof inboundVideoReport.framesPerSecond === 'number'
+            ? Number(inboundVideoReport.framesPerSecond.toFixed(1))
+            : null
+        }
+
+        stats.packetsLost = inboundVideoReport.packetsLost ?? null
+        stats.jitterMs = typeof inboundVideoReport.jitter === 'number'
+          ? Number((inboundVideoReport.jitter * 1000).toFixed(1))
+          : null
+
+        previousInboundVideoStats.value = {
+          bytesReceived: inboundVideoReport.bytesReceived ?? 0,
+          framesDecoded: inboundVideoReport.framesDecoded ?? 0,
+          timestamp: inboundVideoReport.timestamp ?? 0,
+        }
+      }
+
+      if (trackReport) {
+        stats.frameWidth = trackReport.frameWidth ?? null
+        stats.frameHeight = trackReport.frameHeight ?? null
+      }
+
+      if (selectedCandidatePair) {
+        stats.roundTripTimeMs = typeof selectedCandidatePair.currentRoundTripTime === 'number'
+          ? Number((selectedCandidatePair.currentRoundTripTime * 1000).toFixed(1))
+          : null
+        stats.availableOutgoingBitrateKbps = typeof selectedCandidatePair.availableOutgoingBitrate === 'number'
+          ? Number((selectedCandidatePair.availableOutgoingBitrate / 1024).toFixed(1))
+          : null
+      }
+
+      stats.updatedAt = toIsoTime()
+      stats.qualityLabel = classifyQualityLabel()
+    } catch (error) {
+      addLog('warning', 'Gagal mengambil statistik peer.', { message: error.message })
+    }
+  }
+
+  const startStatsPolling = () => {
+    if (statsPollTimer.value) {
+      return
+    }
+
+    collectPeerStats()
+    statsPollTimer.value = window.setInterval(() => {
+      collectPeerStats()
+    }, 1000)
+  }
+
+  const getStatsSnapshot = () => ({
+    fps: stats.fps,
+    bitrateKbps: stats.bitrateKbps,
+    packetsLost: stats.packetsLost,
+    jitterMs: stats.jitterMs,
+    roundTripTimeMs: stats.roundTripTimeMs,
+    availableOutgoingBitrateKbps: stats.availableOutgoingBitrateKbps,
+    frameWidth: stats.frameWidth,
+    frameHeight: stats.frameHeight,
+    qualityLabel: stats.qualityLabel,
+    updatedAt: stats.updatedAt,
+  })
+
+  const getStatusSnapshot = () => ({
+    sessionStatus: status.sessionStatus,
+    socketStatus: status.socketStatus,
+    peerStatus: status.peerStatus,
+    connectionState: status.connectionState,
+    controlChannelState: status.controlChannelState,
+    remoteStreamState: status.remoteStreamState,
+    currentStep: status.currentStep,
+    lastError: status.lastError,
+    screenReady: screenReady.value,
+    canInteract: canInteract.value,
+    sessionId: config.sessionId,
+    deviceId: config.deviceId,
+  })
+
+  const attachViewerElements = ({ stageElement = null, videoElement = null } = {}) => {
+    remoteStageElement.value = stageElement
+    remoteVideoElement.value = videoElement
+
+    if (videoElement && remoteStream.value) {
+      optimizeVideoElementForRealtimePlayback(videoElement)
+      videoElement.srcObject = remoteStream.value
+      videoElement.play().catch(() => {})
+    }
+  }
+
+  const detachViewerElements = () => {
+    if (remoteVideoElement.value) {
+      remoteVideoElement.value.srcObject = null
+    }
+
+    remoteStageElement.value = null
+    remoteVideoElement.value = null
+  }
+
+  const registerWindowBridge = () => {
+    window.__remoteDesktopSimulatorBridge = {
+      attachViewerElements,
+      detachViewerElements,
+      focusRemoteStage,
+      handleKeyboard,
+      handleMouseButton,
+      handleMouseMove,
+      handleWheel,
+      getStatsSnapshot,
+      getStatusSnapshot,
+      getRemoteStream: () => remoteStream.value,
+    }
   }
 
   const armSignalingWatchdog = (context = {}) => {
@@ -748,6 +1144,7 @@ const normalizeIceTransportPolicy = () => {
       }
 
       peerRef.value = peer
+      startStatsPolling()
       updatePeerState()
       status.peerStatus = 'ready'
       addLog('success', 'Peer connection berhasil dibuat.')
@@ -911,6 +1308,9 @@ const normalizeIceTransportPolicy = () => {
   }
 
   const cleanupPeerConnection = () => {
+    stopStatsPolling()
+    resetStats()
+
     if (bootstrapControlChannelRef.value) {
       bootstrapControlChannelRef.value.onopen = null
       bootstrapControlChannelRef.value.onclose = null
@@ -1430,18 +1830,25 @@ const normalizeIceTransportPolicy = () => {
   }
 
   onBeforeUnmount(() => {
+    stopStatsPolling()
+    delete window.__remoteDesktopSimulatorBridge
     cleanupAll()
   })
 
+  registerWindowBridge()
+
   return proxyRefs({
+    attachViewerElements,
     applyStunOnlyPreset,
     applyTurnPreset,
     canInteract,
     config,
     controlReady,
+    devices,
     createAndSendOffer,
     createPeerConnection,
     createSession,
+    generateAccessToken,
     eventHistory,
     handleKeyboard,
     handleMouseButton,
@@ -1452,13 +1859,20 @@ const normalizeIceTransportPolicy = () => {
     isTerminal,
     loadSessionDetail,
     logs,
+    getStatsSnapshot,
+    getStatusSnapshot,
+    loadTurnCredentials,
     runStep,
+    loadDevices,
+    screenReady,
     session,
     setRemoteStageElement,
     setRemoteVideoElement,
+    stats,
     status,
     terminateSession,
     connectSocket,
+    detachViewerElements,
     focusRemoteStage,
   })
 }
