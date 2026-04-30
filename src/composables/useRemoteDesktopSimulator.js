@@ -215,6 +215,50 @@ export function useRemoteDesktopSimulator() {
   const signalingWatchdogTimer = ref(null)
   const bootstrapControlChannelRef = ref(null)
 
+  const optimizeVideoElementForRealtimePlayback = (element) => {
+    if (!element) {
+      return
+    }
+
+    element.autoplay = true
+    element.playsInline = true
+    element.muted = true
+
+    if ('disableRemotePlayback' in element) {
+      element.disableRemotePlayback = true
+    }
+  }
+
+  const optimizeReceiverForLowLatency = (receiver) => {
+    if (!receiver) {
+      return
+    }
+
+    try {
+      if ('playoutDelayHint' in receiver) {
+        receiver.playoutDelayHint = 0
+      }
+    } catch {}
+
+    try {
+      if ('jitterBufferTarget' in receiver) {
+        receiver.jitterBufferTarget = 0
+      }
+    } catch {}
+  }
+
+  const optimizeTrackForRealtimePlayback = (track) => {
+    if (!track) {
+      return
+    }
+
+    try {
+      if ('contentHint' in track) {
+        track.contentHint = 'motion'
+      }
+    } catch {}
+  }
+
   const addLog = (level, message, detail = null) => {
     logs.value = [createLogEntry(level, message, detail), ...logs.value].slice(0, 120)
   }
@@ -270,6 +314,7 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    optimizeVideoElementForRealtimePlayback(element)
     element.srcObject = remoteStream.value
     if (remoteStream.value) {
       element.play().catch(() => {})
@@ -281,6 +326,7 @@ export function useRemoteDesktopSimulator() {
       return
     }
 
+    optimizeVideoElementForRealtimePlayback(remoteVideoElement.value)
     remoteVideoElement.value.srcObject = stream
     if (stream) {
       remoteVideoElement.value.play().catch(() => {})
@@ -642,12 +688,16 @@ const normalizeIceTransportPolicy = () => {
       }
 
       peer.ontrack = (event) => {
+        optimizeTrackForRealtimePlayback(event.track)
+        optimizeReceiverForLowLatency(event.receiver)
         remoteStream.value = event.streams[0] ?? new MediaStream([event.track])
         status.remoteStreamState = 'active'
         status.currentStep = 'screen_live'
         addLog('success', 'Remote track diterima dan dirender ke video.', {
           kind: event.track.kind,
           streamId: remoteStream.value?.id,
+          contentHint: event.track.contentHint ?? null,
+          playoutDelayHint: event.receiver?.playoutDelayHint ?? null,
         })
       }
 
