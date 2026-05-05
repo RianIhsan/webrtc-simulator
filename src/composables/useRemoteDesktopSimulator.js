@@ -17,6 +17,8 @@ const SESSION_EVENT_TO_STATUS = {
   'remote.desktop.session.expired': 'expired',
 }
 
+const EXPECTED_TRANSPORT_TYPE = 'webrtc'
+
 const SIGNALING_EVENT_NAMES = new Set([
   'remote.desktop.signaling.message',
   'remote.desktop.signaling',
@@ -180,6 +182,7 @@ export function useRemoteDesktopSimulator() {
   const status = reactive({
     currentStep: 'idle',
     sessionStatus: 'idle',
+    transportType: '',
     socketStatus: 'idle',
     socketSessionId: '',
     peerStatus: 'idle',
@@ -300,12 +303,41 @@ export function useRemoteDesktopSimulator() {
   const hasSession = computed(() => Boolean(config.sessionId))
   const isTerminal = computed(() => TERMINAL_SESSION_STATUSES.has(status.sessionStatus))
   const controlReady = computed(() => status.controlChannelState === 'open')
-  const canInteract = computed(() => {
+  const sessionPhase = computed(() => {
+    if (isTerminal.value) {
+      return status.sessionStatus
+    }
+
+    if (status.connectionState === 'connected' || status.sessionStatus === 'connected') {
+      return 'connected'
+    }
+
+    if (
+      status.connectionState === 'checking' ||
+      status.currentStep === 'answer_received' ||
+      status.currentStep === 'offer_sent' ||
+      status.hasRemoteDescription
+    ) {
+      return 'connecting'
+    }
+
+    if (status.latestOfferAt || status.latestAnswerAt || status.currentStep === 'creating_peer') {
+      return 'signaling'
+    }
+
+    if (status.sessionStatus === 'accepted') {
+      return 'accepted'
+    }
+
+    return status.sessionStatus
+  })
+  const viewerReady = computed(() => {
     const transportReady =
       status.connectionState === 'connected' || status.sessionStatus === 'connected'
 
-    return controlReady.value && transportReady && status.remoteStreamState === 'active'
+    return controlReady.value && transportReady
   })
+  const canInteract = computed(() => viewerReady.value && status.remoteStreamState === 'active')
   const screenReady = computed(() => canInteract.value)
   const parsedIceServers = computed(() => parseIceServers())
   const iceConfigSummary = computed(() => {
@@ -372,6 +404,26 @@ export function useRemoteDesktopSimulator() {
     session.value = next
     config.sessionId = next.session_id ?? next.sessionId ?? config.sessionId
     status.sessionStatus = next.status ?? status.sessionStatus
+    status.transportType = next.metadata?.transport_type ?? next.transport_type ?? status.transportType
+  }
+
+  const ensureWebRtcTransport = (payload, { strict = false } = {}) => {
+    const transportType = payload?.metadata?.transport_type ?? payload?.transport_type ?? status.transportType ?? ''
+
+    if (!transportType) {
+      if (strict) {
+        addLog('warning', 'Response session belum menyertakan metadata.transport_type.', {
+          expectedTransportType: EXPECTED_TRANSPORT_TYPE,
+        })
+      }
+      return
+    }
+
+    if (transportType !== EXPECTED_TRANSPORT_TYPE) {
+      throw new Error(
+        `Simulator ini hanya mendukung transport ${EXPECTED_TRANSPORT_TYPE}, tetapi backend mengembalikan ${transportType}.`,
+      )
+    }
   }
 
   const parseIceServers = () => {
@@ -619,6 +671,13 @@ const normalizeIceTransportPolicy = () => {
       config.turnExpiresAt = data?.expires_at ?? ''
       status.turnState = 'success'
 
+      console.log('[remote-desktop] TURN credentials loaded:', {
+        urls: turnUrls,
+        username: config.turnUsername,
+        credential: config.turnCredential,
+        expiresAt: config.turnExpiresAt || null,
+      })
+
       addLog('success', 'Credential TURN berhasil dimuat dari backend.', {
         turnUrlCount: turnUrls.length,
         turnExpiresAt: config.turnExpiresAt || null,
@@ -771,6 +830,7 @@ const normalizeIceTransportPolicy = () => {
     remoteStreamState: status.remoteStreamState,
     currentStep: status.currentStep,
     lastError: status.lastError,
+    viewerReady: viewerReady.value,
     screenReady: screenReady.value,
     canInteract: canInteract.value,
     sessionId: config.sessionId,
@@ -1072,6 +1132,13 @@ const normalizeIceTransportPolicy = () => {
     status.currentStep = 'creating_peer'
 
     try {
+      console.log('[remote-desktop] creating peer with ICE servers:', parseIceServers())
+      console.log('[remote-desktop] current TURN fields:', {
+        username: config.turnUsername,
+        credential: config.turnCredential,
+        expiresAt: config.turnExpiresAt || null,
+      })
+
       const peer = new RTCPeerConnection({
         iceServers: parseIceServers(),
         iceTransportPolicy: normalizeIceTransportPolicy(),
@@ -1592,6 +1659,7 @@ const normalizeIceTransportPolicy = () => {
       }
 
       const data = resolveEnvelope(payload)
+      ensureWebRtcTransport(data, { strict: true })
       syncSession(data)
       status.requestState = 'success'
       status.sessionStatus = data.status ?? 'requested'
@@ -1654,6 +1722,7 @@ const normalizeIceTransportPolicy = () => {
       }
 
       const data = resolveEnvelope(payload)
+      ensureWebRtcTransport(data)
       syncSession(data)
       status.requestState = 'success'
       if (silentIfRequested && status.sessionStatus === 'requested') {
@@ -1901,8 +1970,10 @@ const normalizeIceTransportPolicy = () => {
     loadTurnCredentials,
     runStep,
     loadDevices,
+    viewerReady,
     screenReady,
     session,
+    sessionPhase,
     setRemoteStageElement,
     setRemoteVideoElement,
     stats,

@@ -10,7 +10,7 @@ const stepCards = computed(() => [
     title: 'Step 1',
     label: 'Create session',
     description:
-      'POST create session ke backend, simpan session_id, lalu siapkan state lokal untuk flow remote desktop.',
+      'POST create session WebRTC ke backend, simpan session_id, lalu validasi bahwa transport yang dikembalikan tetap webrtc.',
   },
   {
     id: 'connect-socket',
@@ -24,7 +24,7 @@ const stepCards = computed(() => [
     title: 'Step 3',
     label: 'Setup peer + control channel',
     description:
-      'Buat RTCPeerConnection, daftarkan handler, lalu tunggu datachannel `control` dari agent untuk keyboard dan mouse.',
+      'Buat RTCPeerConnection, buka datachannel `control` dari frontend, lalu siapkan handler untuk keyboard dan mouse.',
   },
   {
     id: 'send-offer',
@@ -36,7 +36,7 @@ const stepCards = computed(() => [
 ])
 
 const statusItems = computed(() => [
-  ['Session', simulator.status.sessionStatus],
+  ['Lifecycle', simulator.sessionPhase],
   ['Socket', simulator.status.socketStatus],
   ['Peer', simulator.status.peerStatus],
   ['Connection', simulator.status.connectionState],
@@ -46,9 +46,11 @@ const statusItems = computed(() => [
 
 const sessionFacts = computed(() => [
   ['Session ID', simulator.config.sessionId || '-'],
+  ['Transport', simulator.status.transportType || 'webrtc (requested)'],
   ['Socket session', simulator.status.socketSessionId || '-'],
   ['Device ID', simulator.config.deviceId || '-'],
   ['Request ID', simulator.status.requestId || '-'],
+  ['Lifecycle', simulator.sessionPhase || '-'],
   ['Current Step', simulator.status.currentStep || '-'],
   ['Last signal', simulator.status.lastSignalType || '-'],
   ['Remote desc', simulator.status.hasRemoteDescription ? 'yes' : 'no'],
@@ -65,7 +67,8 @@ const selectedDeviceSummary = computed(() => {
 })
 
 const viewerFacts = computed(() => [
-  ['Viewer status', simulator.screenReady ? 'ready to open' : 'standby'],
+  ['Viewer status', simulator.viewerReady ? 'ready to open' : 'waiting transport'],
+  ['Screen state', simulator.screenReady ? 'live' : simulator.status.remoteStreamState || 'standby'],
   ['Signal quality', simulator.stats.qualityLabel || '-'],
   ['FPS', simulator.stats.fps ?? '-'],
   ['Bitrate', simulator.stats.bitrateKbps ? `${simulator.stats.bitrateKbps} kbps` : '-'],
@@ -97,8 +100,8 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
         <p class="eyebrow">Frontend Remote Desktop Simulator</p>
         <h1>Web RTC Simulator</h1>
         <p class="hero-text">
-          Screen tidak langsung dirender di halaman ini. Setelah stream dan control sudah siap, operator membuka viewer
-          terpisah di tab baru untuk mode fullscreen dan monitoring kualitas koneksi.
+          Frontend ini hanya mensimulasikan flow WebRTC. Screen tidak langsung dirender di halaman ini; setelah media dan
+          control siap, operator membuka viewer terpisah di tab baru untuk mode fullscreen dan monitoring kualitas koneksi.
         </p>
       </div>
 
@@ -348,8 +351,8 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <span :class="['badge', simulator.controlReady ? 'badge--success' : 'badge--muted']">
                 control {{ simulator.status.controlChannelState }}
               </span>
-              <span :class="['badge', simulator.screenReady ? 'badge--success' : 'badge--warning']">
-                {{ simulator.screenReady ? 'viewer ready' : 'waiting readiness' }}
+              <span :class="['badge', simulator.viewerReady ? 'badge--success' : 'badge--warning']">
+                {{ simulator.viewerReady ? 'viewer ready' : 'waiting transport' }}
               </span>
             </div>
           </div>
@@ -357,11 +360,11 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
           <div class="viewer-launchpad">
             <div class="viewer-launchpad__copy">
               <strong>
-                {{ simulator.screenReady ? 'Screen siap ditampilkan' : 'Screen belum siap ditampilkan' }}
+                {{ simulator.screenReady ? 'Screen siap ditampilkan' : simulator.viewerReady ? 'Viewer siap dibuka, menunggu frame pertama' : 'Screen belum siap ditampilkan' }}
               </strong>
               <p>
-                Halaman ini hanya menjaga session, socket, dan peer connection. Screen baru akan dirender ketika operator
-                menekan tombol di bawah dan membuka viewer pada tab terpisah.
+                Halaman ini hanya menjaga session WebRTC, WebSocket signaling, dan peer connection. Screen baru akan
+                dirender ketika operator menekan tombol di bawah dan membuka viewer pada tab terpisah.
               </p>
             </div>
 
@@ -376,7 +379,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <button
                 class="primary-button"
                 type="button"
-                :disabled="!simulator.screenReady"
+                :disabled="!simulator.viewerReady"
                 @click="openViewerTab"
               >
                 Tampilkan screen di tab baru
