@@ -1567,6 +1567,7 @@ const normalizeIceTransportPolicy = () => {
         },
         body: JSON.stringify({
           timeout_seconds: Number(config.timeoutSeconds),
+          transport_type: 'webrtc',
           metadata: {
             source: config.metadataSource,
             page: config.metadataPage,
