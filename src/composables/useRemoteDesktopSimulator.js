@@ -2061,7 +2061,6 @@ const normalizeIceTransportPolicy = () => {
         timestamp: Date.now(),
       }
 
-      flushMouseMovePayload()
       startMouseMoveDispatchLoop()
     }
 

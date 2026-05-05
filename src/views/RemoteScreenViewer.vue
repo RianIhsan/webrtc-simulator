@@ -6,11 +6,6 @@ const videoRef = ref(null)
 const bridgeMissing = ref(false)
 const isFullscreen = ref(false)
 const statsTimer = ref(null)
-const localCursor = reactive({
-  visible: false,
-  xPercent: 50,
-  yPercent: 50,
-})
 const status = reactive({
   sessionStatus: 'idle',
   socketStatus: 'idle',
@@ -107,22 +102,12 @@ const forwardKeyboard = (type, event) => {
 
 const forwardMouseMove = (event) => {
   const bridge = getBridge()
-  const preview = bridge?.handleMouseMove?.(event) ?? bridge?.getLocalCursorPreview?.(event) ?? null
-
-  if (preview) {
-    localCursor.visible = true
-    localCursor.xPercent = preview.stageX
-    localCursor.yPercent = preview.stageY
-  }
+  bridge?.handleMouseMove?.(event)
 }
 
 const forwardMouseButton = (type, event) => {
   const bridge = getBridge()
   bridge?.handleMouseButton?.(type, event)
-}
-
-const hideLocalCursor = () => {
-  localCursor.visible = false
 }
 
 const forwardWheel = (event) => {
@@ -231,23 +216,13 @@ onBeforeUnmount(() => {
             autoplay
             playsinline
             muted
-            :class="['viewer-video', status.canInteract ? 'viewer-video--interactive' : '']"
+            class="viewer-video"
             @mousemove="forwardMouseMove"
-            @mouseleave="hideLocalCursor"
             @click="stageRef?.focus()"
             @mousedown.prevent="forwardMouseButton('mouse.down', $event)"
             @mouseup.prevent="forwardMouseButton('mouse.up', $event)"
             @wheel.prevent="forwardWheel"
             @contextmenu.prevent
-          />
-
-          <div
-            v-show="localCursor.visible && status.canInteract"
-            class="local-cursor"
-            :style="{
-              left: `${localCursor.xPercent}%`,
-              top: `${localCursor.yPercent}%`,
-            }"
           />
 
           <div class="viewer-overlay">
@@ -394,10 +369,6 @@ onBeforeUnmount(() => {
   background: #09090d;
 }
 
-.viewer-video--interactive {
-  cursor: none;
-}
-
 .viewer-overlay {
   position: absolute;
   left: 18px;
@@ -407,20 +378,6 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   background: rgba(7, 7, 10, 0.56);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  pointer-events: none;
-}
-
-.local-cursor {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  margin-left: -2px;
-  margin-top: -2px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.92);
-  background: rgba(255, 179, 71, 0.95);
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
-  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
