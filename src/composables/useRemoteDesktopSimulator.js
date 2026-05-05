@@ -219,7 +219,6 @@ export function useRemoteDesktopSimulator() {
   const pendingRemoteIceCandidates = ref([])
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
-  const bootstrapControlChannelRef = ref(null)
   const videoTransceiverRef = ref(null)
   const statsPollTimer = ref(null)
   const previousInboundVideoStats = ref({
@@ -1010,8 +1009,23 @@ const normalizeIceTransportPolicy = () => {
     syncRemoteDescriptionFlag()
   }
 
-  const attachDataChannel = (channel) => {
+  const attachDataChannel = (channel, { role = 'control', replaceExisting = true } = {}) => {
     if (!channel) {
+      return
+    }
+
+    if (
+      !replaceExisting &&
+      controlChannelRef.value &&
+      controlChannelRef.value !== channel &&
+      controlChannelRef.value.readyState !== 'closed'
+    ) {
+      addLog('info', 'Datachannel tambahan diterima, binding channel aktif dipertahankan.', {
+        label: channel.label,
+        role,
+        existingLabel: controlChannelRef.value.label,
+        existingReadyState: controlChannelRef.value.readyState,
+      })
       return
     }
 
@@ -1020,6 +1034,7 @@ const normalizeIceTransportPolicy = () => {
     addLog('info', 'Binding datachannel control.', {
       label: channel.label,
       readyState: channel.readyState,
+      role,
     })
 
     channel.onopen = () => {
@@ -1149,33 +1164,29 @@ const normalizeIceTransportPolicy = () => {
       }
 
       peer.ondatachannel = (event) => {
-        addLog('info', `Remote datachannel diterima: ${event.channel.label}`)
-        attachDataChannel(event.channel)
+        const isPrimaryControlChannel =
+          event.channel.label === 'control' &&
+          (!controlChannelRef.value || controlChannelRef.value.readyState === 'closed')
+
+        addLog(
+          'info',
+          isPrimaryControlChannel
+            ? `Remote datachannel control diterima: ${event.channel.label}`
+            : `Remote datachannel tambahan diterima: ${event.channel.label}`,
+        )
+        attachDataChannel(event.channel, {
+          role: isPrimaryControlChannel ? 'remote-primary' : 'remote-secondary',
+          replaceExisting: isPrimaryControlChannel,
+        })
       }
 
-      // Keep one local bootstrap channel so the SDP offer still includes
-      // the application/datachannel m-line expected by the current agent.
-      // We do not use this channel for control messages; FE will bind to the
-      // inbound control channel created by the agent.
-      const bootstrapChannel = peer.createDataChannel('control-bootstrap', {
+      // FE owns the primary control datachannel per protocol contract.
+      const controlChannel = peer.createDataChannel('control', {
         ordered: true,
       })
-      bootstrapControlChannelRef.value = bootstrapChannel
-      bootstrapChannel.onopen = () => {
-        addLog('info', 'Bootstrap datachannel terbuka.', {
-          label: bootstrapChannel.label,
-          readyState: bootstrapChannel.readyState,
-        })
-      }
-      bootstrapChannel.onclose = () => {
-        addLog('info', 'Bootstrap datachannel tertutup.', {
-          label: bootstrapChannel.label,
-          readyState: bootstrapChannel.readyState,
-        })
-      }
-      bootstrapChannel.onerror = (event) => {
-        addLog('warning', 'Bootstrap datachannel error.', event)
-      }
+      attachDataChannel(controlChannel, {
+        role: 'local-primary',
+      })
 
       peerRef.value = peer
       startStatsPolling()
@@ -1344,17 +1355,6 @@ const normalizeIceTransportPolicy = () => {
   const cleanupPeerConnection = () => {
     stopStatsPolling()
     resetStats()
-
-    if (bootstrapControlChannelRef.value) {
-      bootstrapControlChannelRef.value.onopen = null
-      bootstrapControlChannelRef.value.onclose = null
-      bootstrapControlChannelRef.value.onerror = null
-      bootstrapControlChannelRef.value.onmessage = null
-      if (bootstrapControlChannelRef.value.readyState === 'open') {
-        bootstrapControlChannelRef.value.close()
-      }
-      bootstrapControlChannelRef.value = null
-    }
 
     if (controlChannelRef.value) {
       controlChannelRef.value.onopen = null
