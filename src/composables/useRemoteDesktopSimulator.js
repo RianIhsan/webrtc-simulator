@@ -221,6 +221,7 @@ export function useRemoteDesktopSimulator() {
   const reconnectTimer = ref(null)
   const mouseMoveDispatchTimer = ref(null)
   const pendingMouseMovePayload = ref(null)
+  const lastMouseMoveSentAt = ref(0)
   const pendingRemoteIceCandidates = ref([])
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
@@ -1035,16 +1036,22 @@ const normalizeIceTransportPolicy = () => {
     window.clearInterval(mouseMoveDispatchTimer.value)
     mouseMoveDispatchTimer.value = null
     pendingMouseMovePayload.value = null
+    lastMouseMoveSentAt.value = 0
   }
 
   const flushMouseMovePayload = () => {
     if (!pendingMouseMovePayload.value || !canInteract.value) {
-      return
+      return false
     }
 
     const payload = pendingMouseMovePayload.value
     pendingMouseMovePayload.value = null
-    sendMouseMoveEvent(payload)
+    const didSend = sendMouseMoveEvent(payload)
+    if (didSend) {
+      lastMouseMoveSentAt.value = Date.now()
+    }
+
+    return didSend
   }
 
   const startMouseMoveDispatchLoop = () => {
@@ -1052,10 +1059,10 @@ const normalizeIceTransportPolicy = () => {
       return
     }
 
-    // Keep update cadence stable around 45 Hz while coalescing intermediate mouse positions.
+    // Keep update cadence stable around 60 Hz while coalescing intermediate mouse positions.
     mouseMoveDispatchTimer.value = window.setInterval(() => {
       flushMouseMovePayload()
-    }, 22)
+    }, 16)
   }
 
   const focusRemoteStage = () => {
@@ -2059,6 +2066,11 @@ const normalizeIceTransportPolicy = () => {
         x: preview?.x ?? 0,
         y: preview?.y ?? 0,
         timestamp: Date.now(),
+      }
+
+      const now = Date.now()
+      if (now - lastMouseMoveSentAt.value >= 16) {
+        flushMouseMovePayload()
       }
 
       startMouseMoveDispatchLoop()
