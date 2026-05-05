@@ -218,6 +218,7 @@ export function useRemoteDesktopSimulator() {
   const peerRef = ref(null)
   const controlChannelRef = ref(null)
   const mouseMoveChannelRef = ref(null)
+  const remoteVideoTrackRef = ref(null)
   const reconnectTimer = ref(null)
   const mouseMoveDispatchTimer = ref(null)
   const pendingMouseMovePayload = ref(null)
@@ -294,8 +295,30 @@ export function useRemoteDesktopSimulator() {
 
     try {
       if ('contentHint' in track) {
-        track.contentHint = 'motion'
+        track.contentHint = 'detail'
       }
+    } catch {}
+  }
+
+  const tuneTrackContentHint = () => {
+    const track = remoteVideoTrackRef.value
+    if (!track || !('contentHint' in track)) {
+      return
+    }
+
+    const preferMotion =
+      (typeof stats.fps === 'number' && stats.fps < 18) ||
+      (typeof stats.roundTripTimeMs === 'number' && stats.roundTripTimeMs > 220) ||
+      (typeof stats.jitterBufferDelayMs === 'number' && stats.jitterBufferDelayMs > 140)
+
+    const nextHint = preferMotion ? 'motion' : 'detail'
+
+    if (track.contentHint === nextHint) {
+      return
+    }
+
+    try {
+      track.contentHint = nextHint
     } catch {}
   }
 
@@ -845,6 +868,7 @@ const normalizeIceTransportPolicy = () => {
 
       stats.updatedAt = toIsoTime()
       stats.qualityLabel = classifyQualityLabel()
+      tuneTrackContentHint()
     } catch (error) {
       addLog('warning', 'Gagal mengambil statistik peer.', { message: error.message })
     }
@@ -1322,6 +1346,7 @@ const normalizeIceTransportPolicy = () => {
       peer.ontrack = (event) => {
         optimizeTrackForRealtimePlayback(event.track)
         optimizeReceiverForLowLatency(event.receiver)
+        remoteVideoTrackRef.value = event.track
         remoteStream.value = event.streams[0] ?? new MediaStream([event.track])
         status.remoteStreamState = event.track.muted ? 'pending_media' : 'active'
         status.currentStep = event.track.muted ? 'track_received' : 'screen_live'
@@ -1352,6 +1377,9 @@ const normalizeIceTransportPolicy = () => {
 
         event.track.onended = () => {
           status.remoteStreamState = 'ended'
+          if (remoteVideoTrackRef.value === event.track) {
+            remoteVideoTrackRef.value = null
+          }
           addLog('warning', 'Track remote berakhir.', {
             kind: event.track.kind,
             streamId: remoteStream.value?.id,
@@ -1623,6 +1651,7 @@ const normalizeIceTransportPolicy = () => {
     }
 
     videoTransceiverRef.value = null
+    remoteVideoTrackRef.value = null
 
     status.peerStatus = 'idle'
     status.connectionState = 'closed'
