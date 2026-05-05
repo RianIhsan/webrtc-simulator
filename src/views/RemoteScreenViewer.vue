@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
             autoplay
             playsinline
             muted
-            :class="['viewer-video', status.canInteract ? 'viewer-video--interactive' : '']"
+            class="viewer-video"
             @mousemove="forwardMouseMove"
             @click="stageRef?.focus()"
             @mousedown.prevent="forwardMouseButton('mouse.down', $event)"
@@ -367,11 +367,6 @@ onBeforeUnmount(() => {
   object-fit: contain;
   display: block;
   background: #09090d;
-  image-rendering: auto;
-}
-
-.viewer-video--interactive:hover {
-  cursor: none;
 }
 
 .viewer-overlay {
