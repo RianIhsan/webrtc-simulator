@@ -6,6 +6,11 @@ const videoRef = ref(null)
 const bridgeMissing = ref(false)
 const isFullscreen = ref(false)
 const statsTimer = ref(null)
+const localCursor = reactive({
+  visible: false,
+  xPercent: 50,
+  yPercent: 50,
+})
 const status = reactive({
   sessionStatus: 'idle',
   socketStatus: 'idle',
@@ -22,11 +27,20 @@ const status = reactive({
 })
 const stats = reactive({
   fps: null,
+  framesPerSecond: null,
   bitrateKbps: null,
   packetsLost: null,
   jitterMs: null,
   roundTripTimeMs: null,
   availableOutgoingBitrateKbps: null,
+  framesDecoded: null,
+  framesDropped: null,
+  totalDecodeTimeMs: null,
+  decodeTimePerFrameMs: null,
+  jitterBufferDelayMs: null,
+  jitterBufferEmittedCount: null,
+  videoPipelineLatencyMs: null,
+  estimatedEndToEndLatencyMs: null,
   frameWidth: null,
   frameHeight: null,
   qualityLabel: 'offline',
@@ -93,12 +107,22 @@ const forwardKeyboard = (type, event) => {
 
 const forwardMouseMove = (event) => {
   const bridge = getBridge()
-  bridge?.handleMouseMove?.(event)
+  const preview = bridge?.handleMouseMove?.(event) ?? bridge?.getLocalCursorPreview?.(event) ?? null
+
+  if (preview) {
+    localCursor.visible = true
+    localCursor.xPercent = preview.stageX
+    localCursor.yPercent = preview.stageY
+  }
 }
 
 const forwardMouseButton = (type, event) => {
   const bridge = getBridge()
   bridge?.handleMouseButton?.(type, event)
+}
+
+const hideLocalCursor = () => {
+  localCursor.visible = false
 }
 
 const forwardWheel = (event) => {
@@ -127,10 +151,18 @@ const qualityBadgeClass = computed(() => {
 })
 
 const metricCards = computed(() => [
+  ['E2E est.', stats.estimatedEndToEndLatencyMs ? `${stats.estimatedEndToEndLatencyMs} ms` : '-'],
+  ['Pipeline', stats.videoPipelineLatencyMs ? `${stats.videoPipelineLatencyMs} ms` : '-'],
   ['Quality', stats.qualityLabel || '-'],
   ['FPS', stats.fps ?? '-'],
+  ['FPS (report)', stats.framesPerSecond ?? '-'],
   ['Bitrate', stats.bitrateKbps ? `${stats.bitrateKbps} kbps` : '-'],
   ['RTT', stats.roundTripTimeMs ? `${stats.roundTripTimeMs} ms` : '-'],
+  ['Jitter buffer', stats.jitterBufferDelayMs ? `${stats.jitterBufferDelayMs} ms` : '-'],
+  ['Decode/frame', stats.decodeTimePerFrameMs ? `${stats.decodeTimePerFrameMs} ms` : '-'],
+  ['Decode total', stats.totalDecodeTimeMs ? `${stats.totalDecodeTimeMs} ms` : '-'],
+  ['Frames decoded', stats.framesDecoded ?? '-'],
+  ['Frames dropped', stats.framesDropped ?? '-'],
   ['Jitter', stats.jitterMs ? `${stats.jitterMs} ms` : '-'],
   ['Packets lost', stats.packetsLost ?? '-'],
   ['Resolution', stats.frameWidth && stats.frameHeight ? `${stats.frameWidth} x ${stats.frameHeight}` : '-'],
@@ -201,11 +233,21 @@ onBeforeUnmount(() => {
             muted
             :class="['viewer-video', status.canInteract ? 'viewer-video--interactive' : '']"
             @mousemove="forwardMouseMove"
+            @mouseleave="hideLocalCursor"
             @click="stageRef?.focus()"
             @mousedown.prevent="forwardMouseButton('mouse.down', $event)"
             @mouseup.prevent="forwardMouseButton('mouse.up', $event)"
             @wheel.prevent="forwardWheel"
             @contextmenu.prevent
+          />
+
+          <div
+            v-show="localCursor.visible && status.canInteract"
+            class="local-cursor"
+            :style="{
+              left: `${localCursor.xPercent}%`,
+              top: `${localCursor.yPercent}%`,
+            }"
           />
 
           <div class="viewer-overlay">
@@ -365,6 +407,20 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   background: rgba(7, 7, 10, 0.56);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.local-cursor {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin-left: -2px;
+  margin-top: -2px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  background: rgba(255, 179, 71, 0.95);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 

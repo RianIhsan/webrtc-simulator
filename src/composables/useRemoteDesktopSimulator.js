@@ -217,8 +217,10 @@ export function useRemoteDesktopSimulator() {
   const socketRef = ref(null)
   const peerRef = ref(null)
   const controlChannelRef = ref(null)
+  const mouseMoveChannelRef = ref(null)
   const reconnectTimer = ref(null)
-  const lastMouseMoveSentAt = ref(0)
+  const mouseMoveDispatchTimer = ref(null)
+  const pendingMouseMovePayload = ref(null)
   const pendingRemoteIceCandidates = ref([])
   const activeSocketConnectPromise = ref(null)
   const signalingWatchdogTimer = ref(null)
@@ -231,11 +233,20 @@ export function useRemoteDesktopSimulator() {
   })
   const stats = reactive({
     fps: null,
+    framesPerSecond: null,
     bitrateKbps: null,
     packetsLost: null,
     jitterMs: null,
     roundTripTimeMs: null,
     availableOutgoingBitrateKbps: null,
+    framesDecoded: null,
+    framesDropped: null,
+    totalDecodeTimeMs: null,
+    decodeTimePerFrameMs: null,
+    jitterBufferDelayMs: null,
+    jitterBufferEmittedCount: null,
+    videoPipelineLatencyMs: null,
+    estimatedEndToEndLatencyMs: null,
     frameWidth: null,
     frameHeight: null,
     qualityLabel: 'offline',
@@ -521,11 +532,20 @@ const normalizeIceTransportPolicy = () => {
       timestamp: 0,
     }
     stats.fps = null
+    stats.framesPerSecond = null
     stats.bitrateKbps = null
     stats.packetsLost = null
     stats.jitterMs = null
     stats.roundTripTimeMs = null
     stats.availableOutgoingBitrateKbps = null
+    stats.framesDecoded = null
+    stats.framesDropped = null
+    stats.totalDecodeTimeMs = null
+    stats.decodeTimePerFrameMs = null
+    stats.jitterBufferDelayMs = null
+    stats.jitterBufferEmittedCount = null
+    stats.videoPipelineLatencyMs = null
+    stats.estimatedEndToEndLatencyMs = null
     stats.frameWidth = null
     stats.frameHeight = null
     stats.qualityLabel = 'offline'
@@ -765,9 +785,32 @@ const normalizeIceTransportPolicy = () => {
         }
 
         stats.packetsLost = inboundVideoReport.packetsLost ?? null
+        stats.framesPerSecond = typeof inboundVideoReport.framesPerSecond === 'number'
+          ? Number(inboundVideoReport.framesPerSecond.toFixed(1))
+          : null
+        stats.framesDecoded = inboundVideoReport.framesDecoded ?? null
+        stats.framesDropped = inboundVideoReport.framesDropped ?? null
+        stats.totalDecodeTimeMs = typeof inboundVideoReport.totalDecodeTime === 'number'
+          ? Number((inboundVideoReport.totalDecodeTime * 1000).toFixed(1))
+          : null
         stats.jitterMs = typeof inboundVideoReport.jitter === 'number'
           ? Number((inboundVideoReport.jitter * 1000).toFixed(1))
           : null
+        stats.jitterBufferEmittedCount = inboundVideoReport.jitterBufferEmittedCount ?? null
+        stats.jitterBufferDelayMs =
+          typeof inboundVideoReport.jitterBufferDelay === 'number' &&
+          typeof inboundVideoReport.jitterBufferEmittedCount === 'number' &&
+          inboundVideoReport.jitterBufferEmittedCount > 0
+            ? Number(
+              ((inboundVideoReport.jitterBufferDelay / inboundVideoReport.jitterBufferEmittedCount) * 1000).toFixed(1),
+            )
+            : null
+        stats.decodeTimePerFrameMs =
+          typeof inboundVideoReport.totalDecodeTime === 'number' &&
+          typeof inboundVideoReport.framesDecoded === 'number' &&
+          inboundVideoReport.framesDecoded > 0
+            ? Number(((inboundVideoReport.totalDecodeTime / inboundVideoReport.framesDecoded) * 1000).toFixed(2))
+            : null
 
         previousInboundVideoStats.value = {
           bytesReceived: inboundVideoReport.bytesReceived ?? 0,
@@ -790,6 +833,15 @@ const normalizeIceTransportPolicy = () => {
           : null
       }
 
+      const videoPipelineLatencyMs = (stats.jitterBufferDelayMs ?? 0) + (stats.decodeTimePerFrameMs ?? 0)
+      stats.videoPipelineLatencyMs = videoPipelineLatencyMs > 0 ? Number(videoPipelineLatencyMs.toFixed(1)) : null
+
+      // Heuristic estimate until sender-side frame timestamp exists for true glass-to-glass latency.
+      stats.estimatedEndToEndLatencyMs =
+        stats.videoPipelineLatencyMs !== null && stats.roundTripTimeMs !== null
+          ? Number((stats.videoPipelineLatencyMs + (stats.roundTripTimeMs / 2)).toFixed(1))
+          : stats.videoPipelineLatencyMs
+
       stats.updatedAt = toIsoTime()
       stats.qualityLabel = classifyQualityLabel()
     } catch (error) {
@@ -810,11 +862,20 @@ const normalizeIceTransportPolicy = () => {
 
   const getStatsSnapshot = () => ({
     fps: stats.fps,
+    framesPerSecond: stats.framesPerSecond,
     bitrateKbps: stats.bitrateKbps,
     packetsLost: stats.packetsLost,
     jitterMs: stats.jitterMs,
     roundTripTimeMs: stats.roundTripTimeMs,
     availableOutgoingBitrateKbps: stats.availableOutgoingBitrateKbps,
+    framesDecoded: stats.framesDecoded,
+    framesDropped: stats.framesDropped,
+    totalDecodeTimeMs: stats.totalDecodeTimeMs,
+    decodeTimePerFrameMs: stats.decodeTimePerFrameMs,
+    jitterBufferDelayMs: stats.jitterBufferDelayMs,
+    jitterBufferEmittedCount: stats.jitterBufferEmittedCount,
+    videoPipelineLatencyMs: stats.videoPipelineLatencyMs,
+    estimatedEndToEndLatencyMs: stats.estimatedEndToEndLatencyMs,
     frameWidth: stats.frameWidth,
     frameHeight: stats.frameHeight,
     qualityLabel: stats.qualityLabel,
@@ -865,6 +926,7 @@ const normalizeIceTransportPolicy = () => {
       handleKeyboard,
       handleMouseButton,
       handleMouseMove,
+      getLocalCursorPreview,
       handleWheel,
       getStatsSnapshot,
       getStatusSnapshot,
@@ -958,6 +1020,42 @@ const normalizeIceTransportPolicy = () => {
     controlChannelRef.value.send(JSON.stringify(payload))
     addLog('control', `DC -> ${payload.type}`, payload)
     return true
+  }
+
+  const sendMouseMoveEvent = (payload) => {
+    if (mouseMoveChannelRef.value && mouseMoveChannelRef.value.readyState === 'open') {
+      mouseMoveChannelRef.value.send(JSON.stringify(payload))
+      return true
+    }
+
+    return sendControlEvent(payload)
+  }
+
+  const stopMouseMoveDispatchLoop = () => {
+    window.clearInterval(mouseMoveDispatchTimer.value)
+    mouseMoveDispatchTimer.value = null
+    pendingMouseMovePayload.value = null
+  }
+
+  const flushMouseMovePayload = () => {
+    if (!pendingMouseMovePayload.value || !canInteract.value) {
+      return
+    }
+
+    const payload = pendingMouseMovePayload.value
+    pendingMouseMovePayload.value = null
+    sendMouseMoveEvent(payload)
+  }
+
+  const startMouseMoveDispatchLoop = () => {
+    if (mouseMoveDispatchTimer.value) {
+      return
+    }
+
+    // Keep update cadence stable around 45 Hz while coalescing intermediate mouse positions.
+    mouseMoveDispatchTimer.value = window.setInterval(() => {
+      flushMouseMovePayload()
+    }, 22)
   }
 
   const focusRemoteStage = () => {
@@ -1121,6 +1219,47 @@ const normalizeIceTransportPolicy = () => {
     }
   }
 
+  const attachMouseMoveDataChannel = (channel, { role = 'mouse-move', replaceExisting = true } = {}) => {
+    if (!channel) {
+      return
+    }
+
+    if (
+      !replaceExisting &&
+      mouseMoveChannelRef.value &&
+      mouseMoveChannelRef.value !== channel &&
+      mouseMoveChannelRef.value.readyState !== 'closed'
+    ) {
+      return
+    }
+
+    mouseMoveChannelRef.value = channel
+    addLog('info', 'Binding datachannel mouse move.', {
+      label: channel.label,
+      readyState: channel.readyState,
+      ordered: channel.ordered,
+      maxRetransmits: channel.maxRetransmits,
+      role,
+    })
+
+    channel.onopen = () => {
+      addLog('success', 'Datachannel mouse move terbuka (unordered + unreliable).')
+    }
+
+    channel.onclose = () => {
+      if (mouseMoveChannelRef.value === channel) {
+        mouseMoveChannelRef.value = null
+      }
+      addLog('warning', 'Datachannel mouse move tertutup, fallback ke channel control.')
+    }
+
+    channel.onerror = (event) => {
+      addLog('warning', 'Datachannel mouse move error, fallback ke channel control.', event)
+    }
+
+    channel.onmessage = null
+  }
+
   const createPeerConnection = async () => {
     if (peerRef.value) {
       addLog('info', 'Peer connection sudah ada, setup dilewati.')
@@ -1231,6 +1370,17 @@ const normalizeIceTransportPolicy = () => {
       }
 
       peer.ondatachannel = (event) => {
+        if (event.channel.label === 'mouse-move') {
+          addLog('info', 'Remote datachannel mouse move diterima.', {
+            label: event.channel.label,
+          })
+          attachMouseMoveDataChannel(event.channel, {
+            role: 'remote',
+            replaceExisting: true,
+          })
+          return
+        }
+
         const isPrimaryControlChannel =
           event.channel.label === 'control' &&
           (!controlChannelRef.value || controlChannelRef.value.readyState === 'closed')
@@ -1255,8 +1405,17 @@ const normalizeIceTransportPolicy = () => {
         role: 'local-primary',
       })
 
+      const mouseMoveChannel = peer.createDataChannel('mouse-move', {
+        ordered: false,
+        maxRetransmits: 0,
+      })
+      attachMouseMoveDataChannel(mouseMoveChannel, {
+        role: 'local-unreliable',
+      })
+
       peerRef.value = peer
       startStatsPolling()
+      startMouseMoveDispatchLoop()
       updatePeerState()
       status.peerStatus = 'ready'
       addLog('success', 'Peer connection berhasil dibuat.')
@@ -1421,6 +1580,7 @@ const normalizeIceTransportPolicy = () => {
 
   const cleanupPeerConnection = () => {
     stopStatsPolling()
+    stopMouseMoveDispatchLoop()
     resetStats()
 
     if (controlChannelRef.value) {
@@ -1432,6 +1592,17 @@ const normalizeIceTransportPolicy = () => {
         controlChannelRef.value.close()
       }
       controlChannelRef.value = null
+    }
+
+    if (mouseMoveChannelRef.value) {
+      mouseMoveChannelRef.value.onopen = null
+      mouseMoveChannelRef.value.onclose = null
+      mouseMoveChannelRef.value.onerror = null
+      mouseMoveChannelRef.value.onmessage = null
+      if (mouseMoveChannelRef.value.readyState === 'open') {
+        mouseMoveChannelRef.value.close()
+      }
+      mouseMoveChannelRef.value = null
     }
 
     if (peerRef.value) {
@@ -1841,6 +2012,26 @@ const normalizeIceTransportPolicy = () => {
     }
   }
 
+  const getLocalCursorPreview = (event) => {
+    const stageRect = remoteStageElement.value?.getBoundingClientRect?.() ?? event.currentTarget?.getBoundingClientRect?.()
+    const renderedRect = getRenderedVideoRect(event.currentTarget)
+
+    if (!stageRect || !renderedRect || stageRect.width <= 0 || stageRect.height <= 0) {
+      return null
+    }
+
+    const clampedClientX = Math.min(renderedRect.left + renderedRect.width, Math.max(renderedRect.left, event.clientX))
+    const clampedClientY = Math.min(renderedRect.top + renderedRect.height, Math.max(renderedRect.top, event.clientY))
+    const normalized = normalizedCoordinates(event)
+
+    return {
+      x: normalized.x,
+      y: normalized.y,
+      stageX: Number((((clampedClientX - stageRect.left) / stageRect.width) * 100).toFixed(2)),
+      stageY: Number((((clampedClientY - stageRect.top) / stageRect.height) * 100).toFixed(2)),
+    }
+  }
+
   const handleKeyboard = (type, event) => {
     if (!canInteract.value) {
       return
@@ -1860,21 +2051,21 @@ const normalizeIceTransportPolicy = () => {
   }
 
   const handleMouseMove = (event) => {
-    if (!canInteract.value) {
-      return
+    const preview = getLocalCursorPreview(event)
+
+    if (canInteract.value) {
+      pendingMouseMovePayload.value = {
+        type: 'mouse.move',
+        x: preview?.x ?? 0,
+        y: preview?.y ?? 0,
+        timestamp: Date.now(),
+      }
+
+      flushMouseMovePayload()
+      startMouseMoveDispatchLoop()
     }
 
-    const now = Date.now()
-    if (now - lastMouseMoveSentAt.value < 40) {
-      return
-    }
-
-    lastMouseMoveSentAt.value = now
-    sendControlEvent({
-      type: 'mouse.move',
-      ...normalizedCoordinates(event),
-      timestamp: now,
-    })
+    return preview
   }
 
   const handleMouseButton = (type, event) => {
@@ -1937,6 +2128,7 @@ const normalizeIceTransportPolicy = () => {
 
   onBeforeUnmount(() => {
     stopStatsPolling()
+    stopMouseMoveDispatchLoop()
     delete window.__remoteDesktopSimulatorBridge
     cleanupAll()
   })
