@@ -270,8 +270,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   border-radius: 28px;
   background:
-    radial-gradient(circle at top left, rgba(255, 179, 71, 0.12), transparent 28%),
-    linear-gradient(180deg, rgba(22, 18, 20, 0.96), rgba(10, 10, 14, 0.98));
+    radial-gradient(circle at top left, rgba(76, 154, 255, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.98));
   box-shadow: var(--shadow);
   padding: 18px;
 }
@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
 .viewer-empty {
   border: 1px solid var(--line);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.86);
 }
 
 .viewer-topbar {
@@ -333,14 +333,14 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   border-radius: 24px;
   background:
-    linear-gradient(180deg, rgba(37, 29, 28, 0.92), rgba(12, 12, 16, 0.96)),
-    radial-gradient(circle at center, rgba(110, 168, 254, 0.12), transparent 60%);
+    linear-gradient(180deg, rgba(247, 251, 255, 0.96), rgba(227, 238, 250, 0.94)),
+    radial-gradient(circle at center, rgba(76, 154, 255, 0.12), transparent 60%);
   outline: none;
 }
 
 .viewer-stage:focus {
   border-color: var(--line-strong);
-  box-shadow: 0 0 0 3px rgba(255, 179, 71, 0.15);
+  box-shadow: 0 0 0 3px rgba(76, 154, 255, 0.18);
 }
 
 .viewer-video {
@@ -349,7 +349,7 @@ onBeforeUnmount(() => {
   min-height: 68vh;
   object-fit: contain;
   display: block;
-  background: #09090d;
+  background: #dfeaf7;
 }
 
 .viewer-video--interactive {
@@ -363,8 +363,8 @@ onBeforeUnmount(() => {
   bottom: 18px;
   padding: 14px 16px;
   border-radius: 18px;
-  background: rgba(7, 7, 10, 0.56);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(46, 108, 181, 0.14);
   pointer-events: none;
 }
 
@@ -411,39 +411,39 @@ onBeforeUnmount(() => {
 }
 
 .badge--success {
-  background: rgba(99, 212, 169, 0.14);
-  color: #b8ffe0;
+  background: rgba(14, 159, 110, 0.12);
+  color: #074734;
 }
 
 .badge--info {
-  background: rgba(110, 168, 254, 0.14);
-  color: #d5e6ff;
+  background: rgba(76, 154, 255, 0.14);
+  color: #0d376d;
 }
 
 .badge--warning {
-  background: rgba(255, 209, 102, 0.16);
-  color: #ffe6a0;
+  background: rgba(216, 138, 22, 0.14);
+  color: #5e3a00;
 }
 
 .badge--muted {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(223, 234, 248, 0.9);
   color: var(--muted);
 }
 
 .ghost-button {
-  border: 0;
   border-radius: 999px;
   padding: 12px 18px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(226, 238, 252, 0.9);
   color: var(--text);
+  border: 1px solid rgba(46, 108, 181, 0.12);
 }
 
 .error-banner {
   margin: 16px 0 0;
   padding: 14px 16px;
   border-radius: 16px;
-  background: rgba(255, 123, 123, 0.14);
-  color: #ffd0d0;
+  background: rgba(204, 65, 93, 0.1);
+  color: #5f1324;
 }
 
 .viewer-empty {

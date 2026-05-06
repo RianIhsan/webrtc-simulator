@@ -82,7 +82,7 @@ const viewerFacts = computed(() => [
 ])
 
 const viewerUrl = computed(() => {
-  const url = new URL(window.location.href)
+  const url = new URL(globalThis.location.href)
   url.searchParams.set('viewer', '1')
   if (simulator.config.sessionId) {
     url.searchParams.set('session_id', simulator.config.sessionId)
@@ -123,11 +123,12 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
   <main class="simulator-page">
     <section class="hero-panel">
       <div class="hero-copy">
-        <p class="eyebrow">Frontend Remote Desktop Simulator</p>
-        <h1>Web RTC Simulator</h1>
+        <p class="eyebrow">Sentuh Digital Teknologi</p>
+        <h1>REMOTE DESKTOP SIMULATOR</h1>
         <p class="hero-text">
-          Frontend ini hanya mensimulasikan flow WebRTC. Screen tidak langsung dirender di halaman ini; setelah media dan
-          control siap, operator membuka viewer terpisah di tab baru untuk mode fullscreen dan monitoring kualitas koneksi.
+          Alat bantu untuk simulasi sesi remote desktop secara manual, dengan kontrol penuh atas konfigurasi, langkah
+          proses, dan insight debug yang lengkap. Dirancang untuk membantu tim pengembang memahami dan menguji flow
+          remote desktop end-to-end, dari HTTP API hingga WebRTC viewer.
         </p>
       </div>
 
@@ -490,7 +491,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
     </section>
 
     <div v-if="deleteSessionModal.open" class="modal-backdrop" @click.self="closeDeleteSessionModal">
-      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
+      <dialog class="modal-card" open aria-labelledby="delete-session-title">
         <div class="panel-heading modal-card__head">
           <div>
             <p class="panel-kicker">Danger zone</p>
@@ -533,7 +534,7 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
             {{ simulator.status.deleteSessionState === 'loading' ? 'Deleting...' : 'Delete via HTTP' }}
           </button>
         </div>
-      </section>
+      </dialog>
     </div>
   </main>
 </template>
@@ -701,7 +702,7 @@ label span {
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: rgba(255, 179, 71, 0.1);
+  background: rgba(76, 154, 255, 0.1);
   color: var(--text);
   font-size: 0.84rem;
   white-space: nowrap;
@@ -711,9 +712,9 @@ input,
 select,
 textarea {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(46, 108, 181, 0.18);
   border-radius: 14px;
-  background: rgba(7, 7, 10, 0.28);
+  background: rgba(255, 255, 255, 0.92);
   color: var(--text);
   padding: 12px 14px;
   outline: none;
@@ -723,7 +724,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--line-strong);
-  box-shadow: 0 0 0 3px rgba(255, 179, 71, 0.15);
+  box-shadow: 0 0 0 3px rgba(76, 154, 255, 0.18);
 }
 
 textarea {
@@ -772,7 +773,7 @@ textarea {
 .step-card:hover {
   transform: translateY(-2px);
   border-color: var(--line-strong);
-  background: rgba(255, 179, 71, 0.08);
+  background: rgba(76, 154, 255, 0.08);
 }
 
 .step-card strong {
@@ -816,19 +817,20 @@ button:disabled {
 
 .primary-button {
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: #1b1208;
+  color: #f7fbff;
   font-weight: 700;
 }
 
 .secondary-button,
 .ghost-button {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(226, 238, 252, 0.9);
   color: var(--text);
+  border: 1px solid rgba(46, 108, 181, 0.12);
 }
 
 .danger-button {
-  background: rgba(255, 123, 123, 0.18);
-  color: #ffd0d0;
+  background: rgba(204, 65, 93, 0.1);
+  color: #5f1324;
 }
 
 .modal-backdrop {
@@ -837,7 +839,7 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(6, 8, 14, 0.72);
+  background: rgba(18, 58, 103, 0.22);
   backdrop-filter: blur(10px);
   z-index: 40;
 }
@@ -879,17 +881,17 @@ button:disabled {
 }
 
 .badge--success {
-  background: rgba(99, 212, 169, 0.14);
-  color: #b8ffe0;
+  background: rgba(14, 159, 110, 0.12);
+  color: #074734;
 }
 
 .badge--warning {
-  background: rgba(255, 209, 102, 0.16);
-  color: #ffe6a0;
+  background: rgba(216, 138, 22, 0.14);
+  color: #5e3a00;
 }
 
 .badge--muted {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(223, 234, 248, 0.9);
   color: var(--muted);
 }
 
@@ -939,8 +941,8 @@ button:disabled {
   gap: 18px;
   padding: 22px;
   background:
-    linear-gradient(180deg, rgba(37, 29, 28, 0.92), rgba(12, 12, 16, 0.96)),
-    radial-gradient(circle at center, rgba(110, 168, 254, 0.1), transparent 55%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(236, 244, 253, 0.98)),
+    radial-gradient(circle at center, rgba(76, 154, 255, 0.1), transparent 55%);
 }
 
 .viewer-launchpad__copy {
@@ -977,8 +979,8 @@ button:disabled {
   margin: 16px 0 0;
   padding: 14px 16px;
   border-radius: 16px;
-  background: rgba(255, 123, 123, 0.14);
-  color: #ffd0d0;
+  background: rgba(204, 65, 93, 0.1);
+  color: #5f1324;
 }
 
 .history-list,
