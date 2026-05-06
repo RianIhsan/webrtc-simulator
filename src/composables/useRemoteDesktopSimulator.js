@@ -267,13 +267,13 @@ export function useRemoteDesktopSimulator() {
       if ('playoutDelayHint' in receiver) {
         receiver.playoutDelayHint = 0
       }
-    } catch {}
+    } catch { }
 
     try {
       if ('jitterBufferTarget' in receiver) {
         receiver.jitterBufferTarget = 0
       }
-    } catch {}
+    } catch { }
   }
 
   const optimizeTrackForRealtimePlayback = (track) => {
@@ -285,7 +285,7 @@ export function useRemoteDesktopSimulator() {
       if ('contentHint' in track) {
         track.contentHint = 'motion'
       }
-    } catch {}
+    } catch { }
   }
 
   const addLog = (level, message, detail = null) => {
@@ -376,7 +376,7 @@ export function useRemoteDesktopSimulator() {
     optimizeVideoElementForRealtimePlayback(element)
     element.srcObject = remoteStream.value
     if (remoteStream.value) {
-      element.play().catch(() => {})
+      element.play().catch(() => { })
     }
   })
 
@@ -388,7 +388,7 @@ export function useRemoteDesktopSimulator() {
     optimizeVideoElementForRealtimePlayback(remoteVideoElement.value)
     remoteVideoElement.value.srcObject = stream
     if (stream) {
-      remoteVideoElement.value.play().catch(() => {})
+      remoteVideoElement.value.play().catch(() => { })
     }
   })
 
@@ -448,60 +448,66 @@ export function useRemoteDesktopSimulator() {
         ipAddress: item.ip_address ?? item.health?.ip_address ?? '-',
         signalStrengthPercent: item.health?.signal_strength_percent ?? null,
         networkType: item.health?.network_type ?? null,
+        hasTouchscreen: item.has_touchscreen === true,
         raw: item,
       }))
   }
 
-const normalizeIceTransportPolicy = () => {
-  const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : '';
-  return value === 'all' ? 'all' : 'relay';
-}
+  const hasTouchscreenForSelectedDevice = () => {
+    const device = devices.value.find((d) => d.id === config.deviceId)
+    return device?.hasTouchscreen ?? false
+  }
+
+  const normalizeIceTransportPolicy = () => {
+    const value = typeof config.iceTransportPolicy === 'string' ? config.iceTransportPolicy.trim().toLowerCase() : '';
+    return value === 'all' ? 'all' : 'relay';
+  }
   const buildStunOnlyIceServers = () => [{ urls: 'stun:stun.l.google.com:19302' }]
 
   const applyStunOnlyPreset = () => {
-  config.iceServersJson = JSON.stringify(buildStunOnlyIceServers(), null, 2);
-  config.iceTransportPolicy = 'all';
-  addLog('info', 'Preset ICE STUN-only diterapkan ke simulator.', {
-    mode: 'stun-only',
-    iceTransportPolicy: config.iceTransportPolicy,
-  });
-}
+    config.iceServersJson = JSON.stringify(buildStunOnlyIceServers(), null, 2);
+    config.iceTransportPolicy = 'all';
+    addLog('info', 'Preset ICE STUN-only diterapkan ke simulator.', {
+      mode: 'stun-only',
+      iceTransportPolicy: config.iceTransportPolicy,
+    });
+  }
 
   const applyTurnPreset = () => {
-  const turnUrls = parseJson(config.turnUrlsJson, []);
-  const urls = Array.isArray(turnUrls) ? turnUrls.filter((url) => typeof url === 'string' && url.trim()) : [];
+    const turnUrls = parseJson(config.turnUrlsJson, []);
+    const urls = Array.isArray(turnUrls) ? turnUrls.filter((url) => typeof url === 'string' && url.trim()) : [];
 
-  if (urls.length === 0) {
-    setError('TURN URLs JSON belum valid. Isi array URL TURN dulu.');
-    return;
+    if (urls.length === 0) {
+      setError('TURN URLs JSON belum valid. Isi array URL TURN dulu.');
+      return;
+    }
+
+    if (!config.turnUsername || !config.turnCredential) {
+      setError('TURN username dan credential wajib diisi sebelum menerapkan preset TURN.');
+      return;
+    }
+
+    config.iceServersJson = JSON.stringify(
+      [
+        ...buildStunOnlyIceServers(),
+        {
+          urls,
+          username: config.turnUsername,
+          credential: config.turnCredential,
+        },
+      ],
+      null,
+      2,
+    );
+    config.iceTransportPolicy = 'relay';
+
+    addLog('info', 'Preset ICE STUN + TURN diterapkan ke simulator.', {
+      mode: 'stun+turn',
+      turnUrlCount: urls.length,
+      turnExpiresAt: config.turnExpiresAt || null,
+      iceTransportPolicy: config.iceTransportPolicy,
+    });
   }
-
-  if (!config.turnUsername || !config.turnCredential) {
-    setError('TURN username dan credential wajib diisi sebelum menerapkan preset TURN.');
-    return;
-  }
-
-  config.iceServersJson = JSON.stringify(
-    [
-      ...buildStunOnlyIceServers(),
-      {
-        urls,
-        username: config.turnUsername,
-        credential: config.turnCredential,
-      },
-    ],
-    null,
-    2,
-  );
-  config.iceTransportPolicy = 'relay';
-
-  addLog('info', 'Preset ICE STUN + TURN diterapkan ke simulator.', {
-    mode: 'stun+turn',
-    turnUrlCount: urls.length,
-    turnExpiresAt: config.turnExpiresAt || null,
-    iceTransportPolicy: config.iceTransportPolicy,
-  });
-}
   const syncRemoteDescriptionFlag = () => {
     status.hasRemoteDescription = Boolean(peerRef.value?.remoteDescription)
   }
@@ -836,6 +842,7 @@ const normalizeIceTransportPolicy = () => {
     canInteract: canInteract.value,
     sessionId: config.sessionId,
     deviceId: config.deviceId,
+    hasTouchscreen: hasTouchscreenForSelectedDevice(),
   })
 
   const attachViewerElements = ({ stageElement = null, videoElement = null } = {}) => {
@@ -845,7 +852,7 @@ const normalizeIceTransportPolicy = () => {
     if (videoElement && remoteStream.value) {
       optimizeVideoElementForRealtimePlayback(videoElement)
       videoElement.srcObject = remoteStream.value
-      videoElement.play().catch(() => {})
+      videoElement.play().catch(() => { })
     }
   }
 
