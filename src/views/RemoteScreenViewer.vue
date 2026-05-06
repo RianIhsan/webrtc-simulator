@@ -6,6 +6,10 @@ const videoRef = ref(null)
 const bridgeMissing = ref(false)
 const isFullscreen = ref(false)
 const statsTimer = ref(null)
+const cursorX = ref(0)
+const cursorY = ref(0)
+const cursorVisible = ref(false)
+
 const status = reactive({
   sessionStatus: 'idle',
   socketStatus: 'idle',
@@ -19,6 +23,7 @@ const status = reactive({
   canInteract: false,
   sessionId: '',
   deviceId: '',
+  hasTouchscreen: false,
 })
 const stats = reactive({
   fps: null,
@@ -94,6 +99,16 @@ const forwardKeyboard = (type, event) => {
 const forwardMouseMove = (event) => {
   const bridge = getBridge()
   bridge?.handleMouseMove?.(event)
+}
+
+const onMouseMove = (event) => {
+  const rect = videoRef.value?.getBoundingClientRect()
+  if (rect) {
+    cursorX.value = event.clientX - rect.left
+    cursorY.value = event.clientY - rect.top
+    cursorVisible.value = true
+  }
+  forwardMouseMove(event)
 }
 
 const forwardMouseButton = (type, event) => {
@@ -200,12 +215,21 @@ onBeforeUnmount(() => {
             playsinline
             muted
             :class="['viewer-video', status.canInteract ? 'viewer-video--interactive' : '']"
-            @mousemove="forwardMouseMove"
+            @mousemove="onMouseMove"
+            @mouseleave="cursorVisible = false"
             @click="stageRef?.focus()"
             @mousedown.prevent="forwardMouseButton('mouse.down', $event)"
             @mouseup.prevent="forwardMouseButton('mouse.up', $event)"
             @wheel.prevent="forwardWheel"
             @contextmenu.prevent
+          />
+
+          <div
+            v-if="status.canInteract && cursorVisible"
+            class="cursor-overlay"
+            :class="status.hasTouchscreen ? 'cursor-overlay--touch' : 'cursor-overlay--pointer'"
+            :style="{ transform: `translate(${cursorX}px, ${cursorY}px)` }"
+            aria-hidden="true"
           />
 
           <div class="viewer-overlay">
@@ -354,6 +378,31 @@ onBeforeUnmount(() => {
 
 .viewer-video--interactive {
   cursor: none;
+}
+
+.cursor-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 10;
+  will-change: transform;
+}
+
+.cursor-overlay--touch {
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 179, 71, 0.9);
+  background: rgba(255, 179, 71, 0.15);
+  box-shadow: 0 0 0 4px rgba(255, 179, 71, 0.12);
+}
+
+.cursor-overlay--pointer {
+  width: 18px;
+  height: 18px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M2 2l5.5 13 2-5.5L15 7.5z' fill='white' stroke='%23333' stroke-width='1'/%3E%3C/svg%3E") no-repeat top left / contain;
 }
 
 .viewer-overlay {
