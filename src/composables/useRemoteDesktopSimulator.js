@@ -206,6 +206,7 @@ export function useRemoteDesktopSimulator() {
     authState: 'idle',
     devicesState: 'idle',
     turnState: 'idle',
+    deleteSessionState: 'idle',
   })
 
   const session = ref(null)
@@ -1788,6 +1789,64 @@ const normalizeIceTransportPolicy = () => {
     resetSessionRuntimeState({ preserveSessionId: true })
   }
 
+  const deleteSession = async (overrides = {}) => {
+    clearError()
+
+    const targetDeviceId = String(overrides.deviceId ?? config.deviceId ?? '').trim()
+    const targetSessionId = String(overrides.sessionId ?? config.sessionId ?? '').trim()
+
+    if (!targetDeviceId) {
+      setError('Device ID belum tersedia untuk delete session.')
+      return false
+    }
+
+    if (!targetSessionId) {
+      setError('Session ID belum tersedia untuk delete session.')
+      return false
+    }
+
+    status.deleteSessionState = 'loading'
+
+    try {
+      const url = buildUrl(
+        config.apiBaseUrl,
+        `/devices/${targetDeviceId}/remote-desktop/sessions/${targetSessionId}`,
+      )
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          ...(config.accessToken ? { Authorization: `Bearer ${config.accessToken}` } : {}),
+        },
+      })
+      const payload = await response.json().catch(() => ({}))
+      status.requestId = payload?.request_id ?? status.requestId
+
+      if (!response.ok) {
+        throw new Error(payload?.message ?? 'Gagal delete session remote desktop.')
+      }
+
+      addLog('success', 'Delete session via HTTP berhasil.', {
+        deviceId: targetDeviceId,
+        sessionId: targetSessionId,
+        response: payload,
+      })
+
+      if (targetSessionId === config.sessionId) {
+        status.sessionStatus = 'ended'
+        cleanupPeerConnection()
+        cleanupSocket({ reason: 'session-deleted' })
+        resetSessionRuntimeState()
+      }
+
+      status.deleteSessionState = 'success'
+      return true
+    } catch (error) {
+      status.deleteSessionState = 'error'
+      setError(error.message, { requestId: status.requestId })
+      return false
+    }
+  }
+
   const getRenderedVideoRect = (fallbackTarget) => {
     const videoElement = remoteVideoElement.value
     const fallbackRect = fallbackTarget?.getBoundingClientRect?.()
@@ -1978,6 +2037,7 @@ const normalizeIceTransportPolicy = () => {
     setRemoteVideoElement,
     stats,
     status,
+    deleteSession,
     terminateSession,
     connectSocket,
     detachViewerElements,

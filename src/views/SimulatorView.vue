@@ -1,8 +1,13 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import { useRemoteDesktopSimulator } from '../composables/useRemoteDesktopSimulator'
 
 const simulator = useRemoteDesktopSimulator()
+const deleteSessionModal = reactive({
+  open: false,
+  deviceId: '',
+  sessionId: '',
+})
 
 const stepCards = computed(() => [
   {
@@ -88,6 +93,27 @@ const viewerUrl = computed(() => {
 const openViewerTab = () => {
   const viewerWindow = window.open(viewerUrl.value, '_blank', 'noopener=no,noreferrer=no')
   viewerWindow?.focus?.()
+}
+
+const openDeleteSessionModal = () => {
+  deleteSessionModal.deviceId = simulator.config.deviceId || ''
+  deleteSessionModal.sessionId = simulator.config.sessionId || ''
+  deleteSessionModal.open = true
+}
+
+const closeDeleteSessionModal = () => {
+  deleteSessionModal.open = false
+}
+
+const submitDeleteSession = async () => {
+  const deleted = await simulator.deleteSession({
+    deviceId: deleteSessionModal.deviceId,
+    sessionId: deleteSessionModal.sessionId,
+  })
+
+  if (deleted) {
+    closeDeleteSessionModal()
+  }
 }
 
 const logLevelClass = (level) => `log-entry log-entry--${level}`
@@ -387,6 +413,9 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
               <button class="danger-button" type="button" @click="simulator.terminateSession('ws')">
                 Terminate via WS
               </button>
+              <button class="danger-button" type="button" @click="openDeleteSessionModal">
+                Delete Session
+              </button>
               <button class="ghost-button" type="button" @click="simulator.terminateSession('both')">
                 Force terminate WS + HTTP
               </button>
@@ -459,6 +488,53 @@ const logLevelClass = (level) => `log-entry log-entry--${level}`
         </article>
       </div>
     </section>
+
+    <div v-if="deleteSessionModal.open" class="modal-backdrop" @click.self="closeDeleteSessionModal">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
+        <div class="panel-heading modal-card__head">
+          <div>
+            <p class="panel-kicker">Danger zone</p>
+            <h2 id="delete-session-title">Delete Session</h2>
+          </div>
+          <button class="ghost-button" type="button" @click="closeDeleteSessionModal">
+            Tutup
+          </button>
+        </div>
+
+        <p class="modal-copy">
+          Field di bawah otomatis terisi dari session aktif saat ini, tetapi tetap bisa diubah manual sebelum request dikirim.
+        </p>
+
+        <div class="config-grid modal-grid">
+          <label>
+            <span>Device ID</span>
+            <input v-model="deleteSessionModal.deviceId" placeholder="36a3f14b-81f6-4dbc-a677-ddd994ca5c8a" />
+          </label>
+          <label>
+            <span>Session ID</span>
+            <input v-model="deleteSessionModal.sessionId" placeholder="rds-123" />
+          </label>
+        </div>
+
+        <p v-if="simulator.status.lastError" class="error-banner modal-error">
+          {{ simulator.status.lastError }}
+        </p>
+
+        <div class="action-row modal-actions">
+          <button class="ghost-button" type="button" @click="closeDeleteSessionModal">
+            Batal
+          </button>
+          <button
+            class="danger-button"
+            type="button"
+            :disabled="simulator.status.deleteSessionState === 'loading'"
+            @click="submitDeleteSession"
+          >
+            {{ simulator.status.deleteSessionState === 'loading' ? 'Deleting...' : 'Delete via HTTP' }}
+          </button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -753,6 +829,47 @@ button:disabled {
 .danger-button {
   background: rgba(255, 123, 123, 0.18);
   color: #ffd0d0;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 8, 14, 0.72);
+  backdrop-filter: blur(10px);
+  z-index: 40;
+}
+
+.modal-card {
+  width: min(680px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+
+.modal-card__head {
+  margin-bottom: 12px;
+}
+
+.modal-copy {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+
+.modal-grid {
+  margin-bottom: 16px;
+}
+
+.modal-error {
+  margin-bottom: 16px;
+}
+
+.modal-actions {
+  justify-content: flex-end;
 }
 
 .badge {
